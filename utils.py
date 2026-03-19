@@ -6,6 +6,7 @@
 # ライブラリの読み込み
 ############################################################
 import os
+from dataclasses import dataclass, field
 from dotenv import load_dotenv
 import streamlit as st
 import logging
@@ -14,7 +15,7 @@ import unicodedata
 from langchain_community.document_loaders import PyMuPDFLoader, Docx2txtLoader, TextLoader, WebBaseLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
-from langchain.schema import HumanMessage, AIMessage
+from langchain.schema import HumanMessage, AIMessage, Document as LCDocument
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain.chains import create_history_aware_retriever, create_retrieval_chain
@@ -38,7 +39,8 @@ from langchain.chains import LLMChain
 from langchain_openai import ChatOpenAI
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
+from urllib.robotparser import RobotFileParser
 import time
 
 
@@ -63,6 +65,181 @@ def build_error_message(message):
         エラーメッセージと管理者問い合わせテンプレートの連結テキスト
     """
     return "\n".join([message, ct.COMMON_ERROR_MESSAGE])
+
+
+@dataclass
+class ScrapePolicyConfig:
+    """
+    スクレイピング可否判定ポリシー
+    """
+    user_agent: str = "TrendSearcherBot/1.0"
+    request_timeout_sec: int = 8
+    min_interval_sec_per_domain: float = 0.8
+    allowed_domains: set = field(default_factory=set)
+    denied_domains: set = field(default_factory=set)
+    tos_deny_keywords: tuple = (
+        "スクレイピング禁止",
+        "自動収集を禁止",
+        "no scraping",
+        "automated access is prohibited",
+        "bot access prohibited",
+    )
+
+
+class ScrapeEligibilityChecker:
+    """
+    URLの収集可否を判定し、収集対象のみを通す
+    """
+    def __init__(self, config: ScrapePolicyConfig):
+        self.config = config
+        self._robots_cache = {}
+        self._tos_cache = {}
+        self._last_access_at = {}
+        self._session = requests.Session()
+        self._session.headers.update({"User-Agent": self.config.user_agent})
+
+    def _normalize_url(self, url: str) -> str:
+        return (url or "").strip()
+
+    def _domain(self, url: str) -> str:
+        return urlparse(url).netloc.lower()
+
+    def _is_valid_scheme(self, url: str) -> bool:
+        return urlparse(url).scheme.lower() in ("http", "https")
+
+    def _is_domain_allowed(self, domain: str):
+        if domain in self.config.denied_domains:
+            return False, "domain_denied"
+        if self.config.allowed_domains and domain not in self.config.allowed_domains:
+            return False, "domain_not_in_allowlist"
+        return True, "ok"
+
+    def _get_robots(self, domain: str) -> RobotFileParser:
+        if domain in self._robots_cache:
+            return self._robots_cache[domain]
+        parser = RobotFileParser()
+        parser.set_url(f"https://{domain}/robots.txt")
+        try:
+            parser.read()
+        except Exception:
+            # robots.txt 取得失敗時はここではブロックしない
+            pass
+        self._robots_cache[domain] = parser
+        return parser
+
+    def _is_allowed_by_robots(self, url: str):
+        domain = self._domain(url)
+        parser = self._get_robots(domain)
+        try:
+            if not parser.can_fetch(self.config.user_agent, url):
+                return False, "robots_disallow"
+        except Exception:
+            pass
+        return True, "ok"
+
+    def _fetch_tos_text(self, domain: str) -> str:
+        if domain in self._tos_cache:
+            return self._tos_cache[domain]
+
+        candidates = [
+            f"https://{domain}/terms",
+            f"https://{domain}/terms-of-service",
+            f"https://{domain}/tos",
+            f"https://{domain}/policy",
+            f"https://{domain}/利用規約",
+            f"https://{domain}/site-policy",
+        ]
+        text = ""
+        for tos_url in candidates:
+            try:
+                res = self._session.get(tos_url, timeout=self.config.request_timeout_sec)
+                content_type = (res.headers.get("Content-Type") or "").lower()
+                if res.status_code < 400 and "text/html" in content_type:
+                    text = (res.text or "")[:20000].lower()
+                    if text:
+                        break
+            except Exception:
+                continue
+
+        self._tos_cache[domain] = text
+        return text
+
+    def _is_allowed_by_tos(self, domain: str):
+        tos_text = self._fetch_tos_text(domain)
+        if not tos_text:
+            return True, "tos_not_found_or_unreadable"
+        for keyword in self.config.tos_deny_keywords:
+            if keyword.lower() in tos_text:
+                return False, "tos_disallow_keyword_detected"
+        return True, "ok"
+
+    def _respect_rate_limit(self, domain: str):
+        now = time.time()
+        last = self._last_access_at.get(domain, 0.0)
+        wait = self.config.min_interval_sec_per_domain - (now - last)
+        if wait > 0:
+            time.sleep(wait)
+        self._last_access_at[domain] = time.time()
+
+    def _is_fetchable_html(self, url: str):
+        domain = self._domain(url)
+        self._respect_rate_limit(domain)
+        try:
+            res = self._session.head(url, timeout=self.config.request_timeout_sec, allow_redirects=True)
+            if res.status_code >= 400:
+                return False, f"http_error_{res.status_code}"
+            content_type = (res.headers.get("Content-Type") or "").lower()
+            if "text/html" not in content_type:
+                return False, "not_html"
+            return True, "ok"
+        except Exception:
+            try:
+                res = self._session.get(url, timeout=self.config.request_timeout_sec, stream=True)
+                if res.status_code >= 400:
+                    return False, f"http_error_{res.status_code}"
+                content_type = (res.headers.get("Content-Type") or "").lower()
+                if "text/html" not in content_type:
+                    return False, "not_html"
+                return True, "ok"
+            except Exception:
+                return False, "network_error"
+
+    def check_one(self, raw_url: str):
+        url = self._normalize_url(raw_url)
+        if not url:
+            return False, "empty_url"
+        if not self._is_valid_scheme(url):
+            return False, "invalid_scheme"
+
+        domain = self._domain(url)
+        if not domain:
+            return False, "invalid_domain"
+
+        ok, reason = self._is_domain_allowed(domain)
+        if not ok:
+            return False, reason
+        ok, reason = self._is_allowed_by_robots(url)
+        if not ok:
+            return False, reason
+        ok, reason = self._is_allowed_by_tos(domain)
+        if not ok:
+            return False, reason
+        ok, reason = self._is_fetchable_html(url)
+        if not ok:
+            return False, reason
+
+        return True, "allowed"
+
+    def filter_urls(self, urls):
+        allowed = []
+        rejected = []
+        for url in urls:
+            ok, reason = self.check_one(url)
+            if ok:
+                allowed.append(url)
+            else:
+                rejected.append({"url": url, "reason": reason})
+        return allowed, rejected
 
 def _extract_title_and_content(url: str) -> dict:
     """
@@ -171,34 +348,86 @@ def create_rag_chain_from_news_urls(news_urls: list[str]) -> dict:
         }
     """
     logger = logging.getLogger(ct.LOGGER_NAME)
-    results = []
+    policy_checker = ScrapeEligibilityChecker(ScrapePolicyConfig())
+    allowed_urls, rejected_urls = policy_checker.filter_urls(news_urls)
 
-    for idx, url in enumerate(news_urls):
-        logger.info(f"Processing {idx + 1}/{len(news_urls)}: {url}")
-        
-        # タイトルと本文抽出
+    logger.info(
+        {
+            "news_url_policy.total": len(news_urls),
+            "news_url_policy.allowed": len(allowed_urls),
+            "news_url_policy.rejected": len(rejected_urls),
+        }
+    )
+    for row in rejected_urls[:20]:
+        logger.warning({"news_url_policy_rejected": row})
+
+    docs_all = []
+    for idx, url in enumerate(allowed_urls):
+        logger.info(f"Processing {idx + 1}/{len(allowed_urls)}: {url}")
+
         extracted = _extract_title_and_content(url)
-        
         if extracted.get("error"):
-            results.append({
-                "url": url,
-                "title": None,
-                "summary": None,
-                "error": extracted.get("error"),
-            })
-        else:
-            # 本文が取得できた場合のみ要約
-            summary = _summarize_content(extracted.get("content", ""))
-            results.append({
-                "url": url,
-                "title": extracted.get("title"),
-                "summary": summary,
-            })
-        
-        # サーバーへの負荷軽減のため、リクエスト間に遅延を入れる
+            continue
+
+        summary = _summarize_content(extracted.get("content", ""))
+        title = extracted.get("title") or "No title found"
+        source_url = extracted.get("url") or url
+        page_content = f"タイトル: {title}\n要約: {summary}\n参照URL: {source_url}"
+        docs_all.append(
+            LCDocument(
+                page_content=page_content,
+                metadata={"source": source_url, "title": title},
+            )
+        )
+
         time.sleep(0.5)
 
-    return results
+    if not docs_all:
+        docs_all.append(
+            LCDocument(
+                page_content="取得可能なニュース記事が見つかりませんでした。収集条件を見直してください。",
+                metadata={"source": "system"},
+            )
+        )
+
+    for doc in docs_all:
+        doc.page_content = adjust_string(doc.page_content)
+        for key in doc.metadata:
+            doc.metadata[key] = adjust_string(str(doc.metadata[key]))
+
+    text_splitter = CharacterTextSplitter(
+        chunk_size=ct.CHUNK_SIZE,
+        chunk_overlap=ct.CHUNK_OVERLAP,
+        separator="\n",
+    )
+    splitted_docs = text_splitter.split_documents(docs_all)
+
+    embeddings = OpenAIEmbeddings()
+    db = Chroma.from_documents(splitted_docs, embedding=embeddings)
+    retriever = db.as_retriever(search_kwargs={"k": ct.TOP_K})
+
+    question_generator_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", ct.SYSTEM_PROMPT_CREATE_INDEPENDENT_TEXT),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
+        ]
+    )
+    question_answer_prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", ct.SYSTEM_PROMPT_INQUIRY),
+            MessagesPlaceholder("chat_history"),
+            ("human", "{input}"),
+        ]
+    )
+
+    history_aware_retriever = create_history_aware_retriever(
+        st.session_state.llm, retriever, question_generator_prompt
+    )
+    question_answer_chain = create_stuff_documents_chain(st.session_state.llm, question_answer_prompt)
+    rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
+
+    return rag_chain
 
 
 def run_politics_doc_chain(param):
