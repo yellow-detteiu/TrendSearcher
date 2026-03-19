@@ -61,7 +61,7 @@ def display_initial_ai_message():
     AIメッセージの初期表示
     """
     with st.chat_message("assistant", avatar=ct.AI_ICON_FILE_PATH):
-        st.success("こちらは弊社に関する質問にお答えする生成AIチャットボットです。AIエージェントの利用有無を選択し、画面下部のチャット欄から質問してください。")
+        st.success("こちらは政治、経済、グルメ、ファッションなど様々なトピックについての最新情報をお届けする生成AIチャットボットです。AIエージェントの利用有無を選択し、画面下部のチャット欄から質問してください。")
         st.warning("具体的に入力したほうが期待通りの回答を得やすいです。", icon=ct.WARNING_ICON)
 
 

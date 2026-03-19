@@ -11,7 +11,7 @@ import streamlit as st
 import logging
 import sys
 import unicodedata
-from langchain_community.document_loaders import PyMuPDFLoader, Docx2txtLoader
+from langchain_community.document_loaders import PyMuPDFLoader, Docx2txtLoader, TextLoader, WebBaseLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain.schema import HumanMessage, AIMessage
@@ -33,6 +33,13 @@ from langchain import LLMChain
 from langchain import SerpAPIWrapper
 import datetime
 import constants as ct
+from langchain.prompts import PromptTemplate
+from langchain.chains import LLMChain
+from langchain_openai import ChatOpenAI
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+import time
 
 
 ############################################################
@@ -57,107 +64,146 @@ def build_error_message(message):
     """
     return "\n".join([message, ct.COMMON_ERROR_MESSAGE])
 
-
-def create_rag_chain(db_name):
+def _extract_title_and_content(url: str) -> dict:
     """
-    引数として渡されたDB内を参照するRAGのChainを作成
+    URLからニュース記事のタイトルと本文を抽出する
+    """
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; TrendSearcherBot/1.0)",
+        }
+        response = requests.get(url, timeout=10, headers=headers)
+        response.encoding = response.apparent_encoding or "utf-8"
 
+        if response.status_code >= 400:
+            return {"url": url, "title": None, "content": None, "error": f"Status {response.status_code}"}
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # タイトル抽出（og:title -> title タグの順で試す）
+        title = None
+        og_title = soup.find("meta", property="og:title")
+        if og_title and og_title.get("content"):
+            title = og_title.get("content")
+        else:
+            title_tag = soup.find("title")
+            if title_tag:
+                title = title_tag.get_text()
+        
+        if not title:
+            title = "No title found"
+
+        # 本文抽出（複数のセレクタを試す）
+        content = None
+        for selector in ["article", "main", "[role='main']", ".content", ".post-content"]:
+            element = soup.select_one(selector)
+            if element:
+                content = element.get_text(strip=True)
+                break
+        
+        if not content:
+            # フォールバック
+            body = soup.find("body")
+            if body:
+                content = body.get_text(strip=True)
+        
+        if not content:
+            content = ""
+
+        return {
+            "url": url,
+            "title": title.strip(),
+            "content": content[:2000],  # 最初の2000文字に制限
+        }
+
+    except Exception as e:
+        return {"url": url, "title": None, "content": None, "error": str(e)}
+
+
+def _summarize_content(content: str) -> str:
+    """
+    抽出したニュース内容をLLMで要約する
+    """
+    if not content or len(content.strip()) == 0:
+        return "内容がありません"
+
+    if "llm" not in st.session_state or st.session_state.llm is None:
+        # LLMが未設定の場合は簡易要約
+        sentences = content.split("。")
+        summary_sentences = sentences[:3] if len(sentences) >= 3 else sentences
+        return "。".join(summary_sentences).strip() + "。"
+
+    summary_prompt = PromptTemplate(
+        input_variables=["content"],
+        template="""
+        以下のニュース記事の内容を、3-5文で日本語で簡潔に要約してください。
+
+        記事内容：
+        {content}
+
+        要約：
+        """,
+    )
+
+    try:
+        chain = LLMChain(llm=st.session_state.llm, prompt=summary_prompt)
+        summary = chain.run(content=content)
+        return summary.strip()
+    except Exception as e:
+        # 要約失敗時は最初の部分を返す
+        return content[:300] + "..."
+
+
+def create_rag_chain_from_news_urls(news_urls: list[str]) -> dict:
+    """
+    ニュースURL群からタイトルと要約を取得する関数
+    
     Args:
-        db_name: RAG化対象のデータを格納するデータベース名
+        news_urls: ニュース記事のURLリスト
+    
+    Returns:
+        各URLのタイトルと要約を含む辞書のリスト
+        {
+            "url": "...",
+            "title": "...",
+            "summary": "...",
+            "error": "..." （エラー時のみ）
+        }
     """
     logger = logging.getLogger(ct.LOGGER_NAME)
+    results = []
 
-    docs_all = []
-    # AIエージェント機能を使わない場合の処理
-    if db_name == ct.DB_ALL_PATH:
-        folders = os.listdir(ct.RAG_TOP_FOLDER_PATH)
-        # 「data」フォルダ直下の各フォルダ名に対して処理
-        for folder_path in folders:
-            if folder_path.startswith("."):
-                continue
-            # フォルダ内の各ファイルのデータをリストに追加
-            add_docs(f"{ct.RAG_TOP_FOLDER_PATH}/{folder_path}", docs_all)
-    # AIエージェント機能を使う場合の処理
-    else:
-        # データベース名に対応した、RAG化対象のデータ群が格納されているフォルダパスを取得
-        folder_path = ct.DB_NAMES[db_name]
-        # フォルダ内の各ファイルのデータをリストに追加
-        add_docs(folder_path, docs_all)
-
-    # OSがWindowsの場合、Unicode正規化と、cp932（Windows用の文字コード）で表現できない文字を除去
-    for doc in docs_all:
-        doc.page_content = adjust_string(doc.page_content)
-        for key in doc.metadata:
-            doc.metadata[key] = adjust_string(doc.metadata[key])
-    
-    text_splitter = CharacterTextSplitter(
-        chunk_size=ct.CHUNK_SIZE,
-        chunk_overlap=ct.CHUNK_OVERLAP,
-        separator="\n",
-    )
-    splitted_docs = text_splitter.split_documents(docs_all)
-
-    embeddings = OpenAIEmbeddings()
-
-    # すでに対象のデータベースが作成済みの場合は読み込み、未作成の場合は新規作成する
-    if os.path.isdir(db_name):
-        db = Chroma(persist_directory=".db", embedding_function=embeddings)
-    else:
-        db = Chroma.from_documents(splitted_docs, embedding=embeddings, persist_directory=".db")
-    retriever = db.as_retriever(search_kwargs={"k": ct.TOP_K})
-
-    question_generator_template = ct.SYSTEM_PROMPT_CREATE_INDEPENDENT_TEXT
-    question_generator_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", question_generator_template),
-            MessagesPlaceholder("chat_history"),
-            ("human", "{input}"),
-        ]
-    )
-    question_answer_template = ct.SYSTEM_PROMPT_INQUIRY
-    question_answer_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", question_answer_template),
-            MessagesPlaceholder("chat_history"),
-            ("human", "{input}"),
-        ]
-    )
-
-    history_aware_retriever = create_history_aware_retriever(
-        st.session_state.llm, retriever, question_generator_prompt
-    )
-
-    question_answer_chain = create_stuff_documents_chain(st.session_state.llm, question_answer_prompt)
-    rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
-
-    return rag_chain
-
-
-def add_docs(folder_path, docs_all):
-    """
-    フォルダ内のファイル一覧を取得
-
-    Args:
-        folder_path: フォルダのパス
-        docs_all: 各ファイルデータを格納するリスト
-    """
-    files = os.listdir(folder_path)
-    for file in files:
-        # ファイルの拡張子を取得
-        file_extension = os.path.splitext(file)[1]
-        # 想定していたファイル形式の場合のみ読み込む
-        if file_extension in ct.SUPPORTED_EXTENSIONS:
-            # ファイルの拡張子に合ったdata loaderを使ってデータ読み込み
-            loader = ct.SUPPORTED_EXTENSIONS[file_extension](f"{folder_path}/{file}")
+    for idx, url in enumerate(news_urls):
+        logger.info(f"Processing {idx + 1}/{len(news_urls)}: {url}")
+        
+        # タイトルと本文抽出
+        extracted = _extract_title_and_content(url)
+        
+        if extracted.get("error"):
+            results.append({
+                "url": url,
+                "title": None,
+                "summary": None,
+                "error": extracted.get("error"),
+            })
         else:
-            continue
-        docs = loader.load()
-        docs_all.extend(docs)
+            # 本文が取得できた場合のみ要約
+            summary = _summarize_content(extracted.get("content", ""))
+            results.append({
+                "url": url,
+                "title": extracted.get("title"),
+                "summary": summary,
+            })
+        
+        # サーバーへの負荷軽減のため、リクエスト間に遅延を入れる
+        time.sleep(0.5)
+
+    return results
 
 
-def run_company_doc_chain(param):
+def run_politics_doc_chain(param):
     """
-    会社に関するデータ参照に特化したTool設定用の関数
+    政治に関するデータ参照に特化したTool設定用の関数
 
     Args:
         param: ユーザー入力値
@@ -165,16 +211,16 @@ def run_company_doc_chain(param):
     Returns:
         LLMからの回答
     """
-    # 会社に関するデータ参照に特化したChainを実行してLLMからの回答取得
-    ai_msg = st.session_state.company_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 政治に関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.politics_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
     # 会話履歴への追加
     st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
 
     return ai_msg["answer"]
 
-def run_service_doc_chain(param):
+def run_economy_doc_chain(param):
     """
-    サービスに関するデータ参照に特化したTool設定用の関数
+    経済に関するデータ参照に特化したTool設定用の関数
 
     Args:
         param: ユーザー入力値
@@ -182,27 +228,348 @@ def run_service_doc_chain(param):
     Returns:
         LLMからの回答
     """
-    # サービスに関するデータ参照に特化したChainを実行してLLMからの回答取得
-    ai_msg = st.session_state.service_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
-
+    # 経済に関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.economy_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
     # 会話履歴への追加
     st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
 
     return ai_msg["answer"]
 
-def run_customer_doc_chain(param):
+def run_international_doc_chain(param):
     """
-    顧客とのやり取りに関するデータ参照に特化したTool設定用の関数
+    国際に関するデータ参照に特化したTool設定用の関数
 
     Args:
         param: ユーザー入力値
-    
+
     Returns:
         LLMからの回答
     """
-    # 顧客とのやり取りに関するデータ参照に特化したChainを実行してLLMからの回答取得
-    ai_msg = st.session_state.customer_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 国際に関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.international_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
 
+    return ai_msg["answer"]
+
+def run_technology_doc_chain(param):
+    """
+    テクノロジーに関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # テクノロジーに関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.technology_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_business_doc_chain(param):
+    """
+    ビジネスに関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # ビジネスに関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.business_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_weather_doc_chain(param):
+    """
+    天気に関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # 天気に関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.weather_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_weater_doc_chain(param):
+    """
+    天気に関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # 天気に関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.weather_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_health_doc_chain(param):
+    """
+    健康に関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # 健康に関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.health_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_fashion_doc_chain(param):
+    """
+    ファッションに関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # ファッションに関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.fashion_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_beauty_doc_chain(param):
+    """
+    美容に関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # 美容に関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.beauty_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_groumet_doc_chain(param):
+    """
+    グルメに関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # グルメに関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.gourmet_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_sightseeing_doc_chain(param):
+    """
+    観光に関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # 観光に関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.sightseeing_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_anime_doc_chain(param):
+    """
+    アニメに関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # アニメに関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.anime_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_manga_doc_chain(param):
+    """
+    漫画に関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # 漫画に関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.manga_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_movie_doc_chain(param):
+    """
+    映画に関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # 映画に関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.movie_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_game_doc_chain(param):
+    """
+    ゲームに関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # ゲームに関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.game_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_music_doc_chain(param):
+    """
+    音楽に関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # 音楽に関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.music_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_entertainment_doc_chain(param):
+    """
+    エンタメに関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # エンタメに関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.entertainment_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_sports_doc_chain(param):
+    """
+    スポーツに関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # スポーツに関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.sports_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_outdoors_doc_chain(param):
+    """
+    アウトドアに関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # アウトドアに関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.outdoors_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_education_doc_chain(param):
+    """
+    教育に関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # 教育に関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.education_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
+    # 会話履歴への追加
+    st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
+
+    return ai_msg["answer"]
+
+def run_career_doc_chain(param):
+    """
+    キャリアに関するデータ参照に特化したTool設定用の関数
+
+    Args:
+        param: ユーザー入力値
+
+    Returns:
+        LLMからの回答
+    """
+    # キャリアに関するデータ参照に特化したChainを実行してLLMからの回答取得
+    ai_msg = st.session_state.career_doc_chain.invoke({"input": param, "chat_history": st.session_state.chat_history})
     # 会話履歴への追加
     st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
 
