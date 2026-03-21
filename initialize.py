@@ -19,8 +19,7 @@ from langchain.tools import Tool
 from langchain.agents import AgentType, initialize_agent
 import utils
 import constants as ct
-
-
+from functools import partial
 
 ############################################################
 # 設定関連
@@ -115,173 +114,43 @@ def initialize_agent_executor():
     
     st.session_state.llm = ChatOpenAI(model_name=ct.MODEL, temperature=ct.TEMPERATURE, streaming=True)
 
-    # 各Tool用のChainを作成
-    st.session_state.politics_doc_chain = utils.create_rag_chain_from_news_urls(ct.POLITICS_URL_LIST)
-    st.session_state.economics_doc_chain = utils.create_rag_chain_from_news_urls(ct.ECONOMICS_URL_LIST)
-    st.session_state.international_doc_chain = utils.create_rag_chain_from_news_urls(ct.INTERNATIONAL_URL_LIST)
-    st.session_state.technology_doc_chain = utils.create_rag_chain_from_news_urls(ct.TECHNOLOGY_URL_LIST)
-    st.session_state.business_doc_chain = utils.create_rag_chain_from_news_urls(ct.BUSINESS_URL_LIST)
-    st.session_state.weather_doc_chain = utils.create_rag_chain_from_news_urls(ct.WEATHER_URL_LIST)
-    st.session_state.health_doc_chain = utils.create_rag_chain_from_news_urls(ct.HEALTH_URL_LIST)
-    st.session_state.fashion_doc_chain = utils.create_rag_chain_from_news_urls(ct.FASHION_URL_LIST)
-    st.session_state.beauty_doc_chain = utils.create_rag_chain_from_news_urls(ct.BEAUTY_URL_LIST)
-    st.session_state.grourmet_doc_chain = utils.create_rag_chain_from_news_urls(ct.GOURMET_URL_LIST)
-    st.session_state.sightseeing_doc_chain = utils.create_rag_chain_from_news_urls(ct.SIGHTSEEING_URL_LIST)
-    st.session_state.anime_doc_chain = utils.create_rag_chain_from_news_urls(ct.ANIME_URL_LIST)
-    st.session_state.manga_doc_chain = utils.create_rag_chain_from_news_urls(ct.MANGA_URL_LIST)
-    st.session_state.movie_doc_chain = utils.create_rag_chain_from_news_urls(ct.MOVIE_URL_LIST)
-    st.session_state.game_doc_chain = utils.create_rag_chain_from_news_urls(ct.GAME_URL_LIST)
-    st.session_state.music_doc_chain = utils.create_rag_chain_from_news_urls(ct.MUSIC_URL_LIST)
-    st.session_state.entertainment_doc_chain = utils.create_rag_chain_from_news_urls(ct.ENTERTAINMENT_URL_LIST)
-    st.session_state.sports_doc_chain = utils.create_rag_chain_from_news_urls(ct.SPORTS_URL_LIST)
-    st.session_state.outdoor_doc_chain = utils.create_rag_chain_from_news_urls(ct.OUTDOOR_URL_LIST)
-    st.session_state.education_doc_chain = utils.create_rag_chain_from_news_urls(ct.EDUCATION_URL_LIST)
-    st.session_state.career_doc_chain = utils.create_rag_chain_from_news_urls(ct.CAREER_URL_LIST)
-
 
     # Web検索用のToolを設定するためのオブジェクトを用意
     #search = SerpAPIWrapper()
     search = SerpAPIWrapper(params={"engine": "google", "hl": "ja", "gl": "jp"}) # エラー予防のため、日本語でGoogle検索を行うためのパラメータを追加
+
+    if "news_chain_cache" not in st.session_state:
+        st.session_state.news_chain_cache = {}
 
     # エラー防止用
     if "search" not in st.session_state:
         st.session_state.search = SerpAPIWrapper(params={"engine": "google", "hl": "ja", "gl": "jp"})
 
     # Agent Executorに渡すTool一覧を用意
-    tools = [
-        # 政治に関するデータ検索用のTool
+    tools = []
+
+    # [constants.py](http://_vscodecontentref_/9) の TOPIC_TOOL_CONFIGS を使って自動生成
+    for cfg in ct.TOPIC_TOOL_CONFIGS:
+        tools.append(
+            Tool(
+                name=cfg["tool_name"],
+                func=partial(
+                    utils.run_category_doc_chain,
+                    cfg["key"],
+                    cfg["query"],
+                ),
+                description=cfg["tool_description"],
+            )
+        )
+
+    # Web検索Toolは従来どおり追加
+    tools.append(
         Tool(
-            name=ct.SEARCH_POLITICS_INFO_TOOL_NAME,
-            func=utils.run_politics_doc_chain,
-            description=ct.SEARCH_POLITICS_INFO_TOOL_DESCRIPTION
-        ),
-        # 経済に関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_ECONOMY_INFO_TOOL_NAME,
-            func=utils.run_economy_doc_chain,
-            description=ct.SEARCH_ECONOMY_INFO_TOOL_DESCRIPTION
-        ),
-        # 国際に関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_INTERNATIONAL_INFO_TOOL_NAME,
-            func=utils.run_international_doc_chain,
-            description=ct.SEARCH_INTERNATIONAL_INFO_TOOL_DESCRIPTION
-        ),
-        # テクノロジーに関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_TECHNOLOGY_INFO_TOOL_NAME,
-            func=utils.run_technology_doc_chain,
-            description=ct.SEARCH_TECHNOLOGY_INFO_TOOL_DESCRIPTION
-        ),
-        # ビジネスに関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_BUSINESS_INFO_TOOL_NAME,
-            func=utils.run_business_doc_chain,
-            description=ct.SEARCH_BUSINESS_INFO_TOOL_DESCRIPTION
-        ),
-        # 天気に関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_WEATHER_INFO_TOOL_NAME,
-            func=utils.run_weather_doc_chain,
-            description=ct.SEARCH_WEATHER_INFO_TOOL_DESCRIPTION
-        ),
-        # 健康に関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_HEALTH_INFO_TOOL_NAME,
-            func=utils.run_health_doc_chain,
-            description=ct.SEARCH_HEALTH_INFO_TOOL_DESCRIPTION
-        ),
-        # ファッションに関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_FASHION_INFO_TOOL_NAME,
-            func=utils.run_fashion_doc_chain,
-            description=ct.SEARCH_FASHION_INFO_TOOL_DESCRIPTION
-        ),
-        # 美容に関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_BEAUTY_INFO_TOOL_NAME,
-            func=utils.run_beauty_doc_chain,
-            description=ct.SEARCH_BEAUTY_INFO_TOOL_DESCRIPTION
-        ),
-        # グルメに関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_GOURMET_INFO_TOOL_NAME,
-            func=utils.run_gourmet_doc_chain,
-            description=ct.SEARCH_GOURMET_INFO_TOOL_DESCRIPTION
-        ),
-        # 観光に関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_SIGHTSEEING_INFO_TOOL_NAME,
-            func=utils.run_sightseeing_doc_chain,
-            description=ct.SEARCH_SIGHTSEEING_INFO_TOOL_DESCRIPTION
-        ),
-        # アニメに関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_ANIME_INFO_TOOL_NAME,
-            func=utils.run_anime_doc_chain,
-            description=ct.SEARCH_ANIME_INFO_TOOL_DESCRIPTION
-        ),
-        # 漫画に関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_MANGA_INFO_TOOL_NAME,
-            func=utils.run_manga_doc_chain,
-            description=ct.SEARCH_MANGA_INFO_TOOL_DESCRIPTION
-        ),
-        # 映画に関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_MOVIE_INFO_TOOL_NAME,
-            func=utils.run_movie_doc_chain,
-            description=ct.SEARCH_MOVIE_INFO_TOOL_DESCRIPTION
-        ),
-        # ゲームに関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_GAME_INFO_TOOL_NAME,
-            func=utils.run_game_doc_chain,
-            description=ct.SEARCH_GAME_INFO_TOOL_DESCRIPTION
-        ),
-        # 音楽に関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_MUSIC_INFO_TOOL_NAME,
-            func=utils.run_music_doc_chain,
-            description=ct.SEARCH_MUSIC_INFO_TOOL_DESCRIPTION
-        ),
-        # 芸能・エンタメに関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_ENTERTAINMENT_INFO_TOOL_NAME,
-            func=utils.run_entertainment_doc_chain,
-            description=ct.SEARCH_ENTERTAINMENT_INFO_TOOL_DESCRIPTION
-        ),
-        # スポーツに関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_SPORTS_INFO_TOOL_NAME,
-            func=utils.run_sports_doc_chain,
-            description=ct.SEARCH_SPORTS_INFO_TOOL_DESCRIPTION
-        ),
-        # アウトドアに関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_OUTDOOR_INFO_TOOL_NAME,
-            func=utils.run_outdoor_doc_chain,
-            description=ct.SEARCH_OUTDOOR_INFO_TOOL_DESCRIPTION
-        ),
-        # 教育に関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_EDUCATION_INFO_TOOL_NAME,
-            func=utils.run_education_doc_chain,
-            description=ct.SEARCH_EDUCATION_INFO_TOOL_DESCRIPTION
-        ),
-        # キャリアに関するデータ検索用のTool
-        Tool(
-            name=ct.SEARCH_CAREER_INFO_TOOL_NAME,
-            func=utils.run_career_doc_chain,
-            description=ct.SEARCH_CAREER_INFO_TOOL_DESCRIPTION
-        ),
-        # Web検索用のTool
-        Tool(
-            name = ct.SEARCH_WEB_INFO_TOOL_NAME,
+            name=ct.SEARCH_WEB_INFO_TOOL_NAME,
             func=search.run,
-            description=ct.SEARCH_WEB_INFO_TOOL_DESCRIPTION
-        ),
-    ]
+            description=ct.SEARCH_WEB_INFO_TOOL_DESCRIPTION,
+        )
+    )
 
     # Agent Executorの作成
     st.session_state.agent_executor = initialize_agent(
@@ -290,5 +159,6 @@ def initialize_agent_executor():
         agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
         max_iterations=ct.AI_AGENT_MAX_ITERATIONS,
         early_stopping_method="generate",
-        handle_parsing_errors=True
+        handle_parsing_errors=True,
+        verbose=True,
     )

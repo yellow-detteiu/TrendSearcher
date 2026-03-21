@@ -43,6 +43,11 @@ from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 import time
 
+import time
+import requests
+import feedparser
+from urllib.parse import quote_plus
+
 
 ############################################################
 # 設定関連
@@ -67,235 +72,75 @@ def build_error_message(message):
     return "\n".join([message, ct.COMMON_ERROR_MESSAGE])
 
 
-@dataclass
-class ScrapePolicyConfig:
-    """
-    スクレイピング可否判定ポリシー
-    """
-    user_agent: str = "TrendSearcherBot/1.0"
-    request_timeout_sec: int = 8
-    min_interval_sec_per_domain: float = 0.8
-    allowed_domains: set = field(default_factory=set)
-    denied_domains: set = field(default_factory=set)
-    tos_deny_keywords: tuple = (
-        "スクレイピング禁止",
-        "自動収集を禁止",
-        "no scraping",
-        "automated access is prohibited",
-        "bot access prohibited",
-    )
+def _build_google_news_rss_url(query: str, hl: str = "ja", gl: str = "JP", ceid: str = "JP:ja") -> str:
+    # Google News RSS (search)
+    # 例: https://news.google.com/rss/search?q=政治&hl=ja&gl=JP&ceid=JP:ja
+    q = quote_plus(query)
+    return f"https://news.google.com/rss/search?q={q}&hl={hl}&gl={gl}&ceid={ceid}"
 
+def _fetch_feed_entries(rss_url: str, timeout: int = 15):
+    response = requests.get(rss_url, timeout=timeout)
+    feed = feedparser.parse(response.content)
+    entries = []
+    for e in feed.entries:
+        entries.append({
+            "title": e.get("title", ""),
+            "link": e.get("link", ""),
+            "published": e.get("published", ""),
+            "source": (e.get("source") or {}).get("title", ""),
+            "summary": e.get("summary", ""),  # RSS側の短い要約
+        })
+    return entries
 
-class ScrapeEligibilityChecker:
-    """
-    URLの収集可否を判定し、収集対象のみを通す
-    """
-    def __init__(self, config: ScrapePolicyConfig):
-        self.config = config
-        self._robots_cache = {}
-        self._tos_cache = {}
-        self._last_access_at = {}
-        self._session = requests.Session()
-        self._session.headers.update({"User-Agent": self.config.user_agent})
+def _collect_news_by_topic(topic: str, query: str, max_articles_per_topic: int = 10, sleep_sec: float = 0.8):
+    results = {}
 
-    def _normalize_url(self, url: str) -> str:
-        return (url or "").strip()
+    rss_url = _build_google_news_rss_url(query)
+    entries = _fetch_feed_entries(rss_url)
 
-    def _domain(self, url: str) -> str:
-        return urlparse(url).netloc.lower()
+    topic_items = []
+    for e in entries[:max_articles_per_topic]:
 
-    def _is_valid_scheme(self, url: str) -> bool:
-        return urlparse(url).scheme.lower() in ("http", "https")
+        topic_items.append({
+            "topic": topic,
+            "title": e["title"],
+            "published": e["published"],
+            "source": e["source"],
+            "url": e["link"],
+            "rss_summary": e["summary"],
+        })
 
-    def _is_domain_allowed(self, domain: str):
-        if domain in self.config.denied_domains:
-            return False, "domain_denied"
-        if self.config.allowed_domains and domain not in self.config.allowed_domains:
-            return False, "domain_not_in_allowlist"
-        return True, "ok"
+        time.sleep(sleep_sec)  # アクセス間隔
 
-    def _get_robots(self, domain: str) -> RobotFileParser:
-        if domain in self._robots_cache:
-            return self._robots_cache[domain]
-        parser = RobotFileParser()
-        parser.set_url(f"https://{domain}/robots.txt")
-        try:
-            parser.read()
-        except Exception:
-            # robots.txt 取得失敗時はここではブロックしない
-            pass
-        self._robots_cache[domain] = parser
-        return parser
+    results[topic] = topic_items
 
-    def _is_allowed_by_robots(self, url: str):
-        domain = self._domain(url)
-        parser = self._get_robots(domain)
-        try:
-            if not parser.can_fetch(self.config.user_agent, url):
-                return False, "robots_disallow"
-        except Exception:
-            pass
-        return True, "ok"
+    return results
 
-    def _fetch_tos_text(self, domain: str) -> str:
-        if domain in self._tos_cache:
-            return self._tos_cache[domain]
+def _make_title_corpus(news_items: List[dict]) -> str:
+    title_corpus_tmp = []
+    for topic, items in news_items.items():
+        for i, x in enumerate(items, 1):
+            title_corpus_tmp.append(x['title'])
 
-        candidates = [
-            f"https://{domain}/terms",
-            f"https://{domain}/terms-of-service",
-            f"https://{domain}/tos",
-            f"https://{domain}/policy",
-            f"https://{domain}/利用規約",
-            f"https://{domain}/site-policy",
-        ]
-        text = ""
-        for tos_url in candidates:
-            try:
-                res = self._session.get(tos_url, timeout=self.config.request_timeout_sec)
-                content_type = (res.headers.get("Content-Type") or "").lower()
-                if res.status_code < 400 and "text/html" in content_type:
-                    text = (res.text or "")[:20000].lower()
-                    if text:
-                        break
-            except Exception:
-                continue
-
-        self._tos_cache[domain] = text
-        return text
-
-    def _is_allowed_by_tos(self, domain: str):
-        tos_text = self._fetch_tos_text(domain)
-        if not tos_text:
-            return True, "tos_not_found_or_unreadable"
-        for keyword in self.config.tos_deny_keywords:
-            if keyword.lower() in tos_text:
-                return False, "tos_disallow_keyword_detected"
-        return True, "ok"
-
-    def _respect_rate_limit(self, domain: str):
-        now = time.time()
-        last = self._last_access_at.get(domain, 0.0)
-        wait = self.config.min_interval_sec_per_domain - (now - last)
-        if wait > 0:
-            time.sleep(wait)
-        self._last_access_at[domain] = time.time()
-
-    def _is_fetchable_html(self, url: str):
-        domain = self._domain(url)
-        self._respect_rate_limit(domain)
-        try:
-            res = self._session.head(url, timeout=self.config.request_timeout_sec, allow_redirects=True)
-            if res.status_code >= 400:
-                return False, f"http_error_{res.status_code}"
-            content_type = (res.headers.get("Content-Type") or "").lower()
-            if "text/html" not in content_type:
-                return False, "not_html"
-            return True, "ok"
-        except Exception:
-            try:
-                res = self._session.get(url, timeout=self.config.request_timeout_sec, stream=True)
-                if res.status_code >= 400:
-                    return False, f"http_error_{res.status_code}"
-                content_type = (res.headers.get("Content-Type") or "").lower()
-                if "text/html" not in content_type:
-                    return False, "not_html"
-                return True, "ok"
-            except Exception:
-                return False, "network_error"
-
-    def check_one(self, raw_url: str):
-        url = self._normalize_url(raw_url)
-        if not url:
-            return False, "empty_url"
-        if not self._is_valid_scheme(url):
-            return False, "invalid_scheme"
-
-        domain = self._domain(url)
-        if not domain:
-            return False, "invalid_domain"
-
-        ok, reason = self._is_domain_allowed(domain)
-        if not ok:
-            return False, reason
-        ok, reason = self._is_allowed_by_robots(url)
-        if not ok:
-            return False, reason
-        ok, reason = self._is_allowed_by_tos(domain)
-        if not ok:
-            return False, reason
-        ok, reason = self._is_fetchable_html(url)
-        if not ok:
-            return False, reason
-
-        return True, "allowed"
-
-    def filter_urls(self, urls):
-        allowed = []
-        rejected = []
-        for url in urls:
-            ok, reason = self.check_one(url)
-            if ok:
-                allowed.append(url)
-            else:
-                rejected.append({"url": url, "reason": reason})
-        return allowed, rejected
-
-def _extract_title_and_content(url: str) -> dict:
-    """
-    URLからニュース記事のタイトルと本文を抽出する
-    """
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; TrendSearcherBot/1.0)",
-        }
-        response = requests.get(url, timeout=10, headers=headers)
-        response.encoding = response.apparent_encoding or "utf-8"
-
-        if response.status_code >= 400:
-            return {"url": url, "title": None, "content": None, "error": f"Status {response.status_code}"}
-
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        # タイトル抽出（og:title -> title タグの順で試す）
-        title = None
-        og_title = soup.find("meta", property="og:title")
-        if og_title and og_title.get("content"):
-            title = og_title.get("content")
-        else:
-            title_tag = soup.find("title")
-            if title_tag:
-                title = title_tag.get_text()
+    title_corpus_tmp = "\n".join(title_corpus_tmp)
         
-        if not title:
-            title = "No title found"
+    return title_corpus_tmp
 
-        # 本文抽出（複数のセレクタを試す）
-        content = None
-        for selector in ["article", "main", "[role='main']", ".content", ".post-content"]:
-            element = soup.select_one(selector)
-            if element:
-                content = element.get_text(strip=True)
-                break
-        
-        if not content:
-            # フォールバック
-            body = soup.find("body")
-            if body:
-                content = body.get_text(strip=True)
-        
-        if not content:
-            content = ""
+def _make_url_list(news_items: List[dict]) -> str:
+    url_list_tmp = []
+    for topic, items in news_items.items():
+        for i, x in enumerate(items, 1):
+            url_list_tmp.append(x['url'])
 
-        return {
-            "url": url,
-            "title": title.strip(),
-            "content": content[:2000],  # 最初の2000文字に制限
-        }
+    return url_list_tmp
 
-    except Exception as e:
-        return {"url": url, "title": None, "content": None, "error": str(e)}
+def _make_source_list(news_items: List[dict]) -> str:
+    source_list_tmp = []
+    for topic, items in news_items.items():
+        for i, x in enumerate(items, 1):
+            source_list_tmp.append(x['source'])
 
+    return source_list_tmp
 
 def _summarize_content(content: str) -> str:
     """
@@ -306,20 +151,13 @@ def _summarize_content(content: str) -> str:
 
     if "llm" not in st.session_state or st.session_state.llm is None:
         # LLMが未設定の場合は簡易要約
-        sentences = content.split("。")
+        sentences = content.split("\n")
         summary_sentences = sentences[:3] if len(sentences) >= 3 else sentences
-        return "。".join(summary_sentences).strip() + "。"
+        return "\n".join(summary_sentences).strip()
 
     summary_prompt = PromptTemplate(
         input_variables=["content"],
-        template="""
-        以下のニュース記事の内容を、3-5文で日本語で簡潔に要約してください。
-
-        記事内容：
-        {content}
-
-        要約：
-        """,
+        template=ct.SYSTEM_PROMPT_SUMMARIZE_ARTICLE,
     )
 
     try:
@@ -329,107 +167,132 @@ def _summarize_content(content: str) -> str:
     except Exception as e:
         # 要約失敗時は最初の部分を返す
         return content[:300] + "..."
+    
+def build_topic_llm_chain(topic_key: str, query: str, max_articles_per_topic: int = 10):
+    # 1. RSS取得
+    news_items = _collect_news_by_topic(
+        topic=topic_key,
+        query=query,
+        max_articles_per_topic=max_articles_per_topic,
+    )
 
+    # 2. タイトル一覧文字列
+    title_corpus = _make_title_corpus(news_items)
+    url_list = _make_url_list(news_items)
+    source_list = _make_source_list(news_items)
 
-def create_rag_chain_from_news_urls(news_urls: list[str]) -> dict:
+    # 3. タイトル一覧を要約
+    topic_summary = _summarize_content(title_corpus)
+
+    # 4. 要約とタイトル群を文脈に持つLLMChainを作成
+    prompt = PromptTemplate(
+        input_variables=["user_input"],
+        template=ct.SYSTEM_PROMPT_RAG_ANSWER.format(
+                    topic_key=topic_key,
+                    topic_summary=topic_summary,
+                    title_corpus=title_corpus,
+                    source_list="\n".join(source_list) if isinstance(source_list, list) else str(source_list),
+                    url_list="\n".join(url_list) if isinstance(url_list, list) else str(url_list),
+                ),
+            )
+
+    return LLMChain(llm=st.session_state.llm, prompt=prompt)
+
+def _generate_web_search_query(user_input: str) -> str:
+    prompt = PromptTemplate(
+        input_variables=["input_text"],
+        template=ct.SYSTEM_PROMPT_WEB_QUERY_GEN + "\n\n質問:\n{input_text}\n"
+    )
+    chain = LLMChain(llm=st.session_state.llm, prompt=prompt)
+    q = chain.run(input_text=user_input).strip()
+    return q.replace("\n", " ").strip()
+
+def build_dynamic_web_llm_chain(user_prompt: str, max_articles_per_topic: int = 8):
     """
-    ニュースURL群からタイトルと要約を取得する関数
-    
-    Args:
-        news_urls: ニュース記事のURLリスト
-    
-    Returns:
-        各URLのタイトルと要約を含む辞書のリスト
-        {
-            "url": "...",
-            "title": "...",
-            "summary": "...",
-            "error": "..." （エラー時のみ）
-        }
+    ユーザープロンプトから検索クエリを生成し、
+    取得ニュースを文脈として LLMChain を組み立てて返す。
     """
     logger = logging.getLogger(ct.LOGGER_NAME)
-    policy_checker = ScrapeEligibilityChecker(ScrapePolicyConfig())
-    allowed_urls, rejected_urls = policy_checker.filter_urls(news_urls)
 
-    logger.info(
-        {
-            "news_url_policy.total": len(news_urls),
-            "news_url_policy.allowed": len(allowed_urls),
-            "news_url_policy.rejected": len(rejected_urls),
-        }
+    # 1) プロンプトから検索クエリを生成
+    search_query = _generate_web_search_query(user_prompt)
+    if not search_query:
+        search_query = user_prompt.strip()
+
+    # 2) 検索クエリでニュース取得（topic名は動的用に固定）
+    news_items = _collect_news_by_topic(
+        topic="dynamic_web",
+        query=search_query,
+        max_articles_per_topic=max_articles_per_topic,
     )
-    for row in rejected_urls[:20]:
-        logger.warning({"news_url_policy_rejected": row})
 
-    docs_all = []
-    for idx, url in enumerate(allowed_urls):
-        logger.info(f"Processing {idx + 1}/{len(allowed_urls)}: {url}")
+    # 3) タイトル・URL・ソースを整形
+    title_corpus = _make_title_corpus(news_items)
+    url_list = _make_url_list(news_items)
+    source_list = _make_source_list(news_items)
 
-        extracted = _extract_title_and_content(url)
-        if extracted.get("error"):
-            continue
+    # 4) タイトル群を要約
+    summary_input = title_corpus if title_corpus.strip() else search_query
+    topic_summary = _summarize_content(summary_input)
 
-        summary = _summarize_content(extracted.get("content", ""))
-        title = extracted.get("title") or "No title found"
-        source_url = extracted.get("url") or url
-        page_content = f"タイトル: {title}\n要約: {summary}\n参照URL: {source_url}"
-        docs_all.append(
-            LCDocument(
-                page_content=page_content,
-                metadata={"source": source_url, "title": title},
+    # URL/ソースは文字列化してプロンプトに埋め込む
+    url_text = "\n".join(url_list) if isinstance(url_list, list) else str(url_list)
+    source_text = "\n".join(source_list) if isinstance(source_list, list) else str(source_list)
+
+    # 5) LLMChain生成
+    prompt = PromptTemplate(
+        input_variables=["user_input"],
+        template=ct.SYSTEM_PROMPT_WEB_RAG_ANSWER.format(
+                    original_prompt=user_prompt,
+                    search_query=search_query,
+                    topic_summary=topic_summary,
+                    title_corpus=title_corpus,
+                    source_text=source_text,
+                    url_text=url_text,
+                ),
             )
-        )
 
-        time.sleep(0.5)
+    chain = LLMChain(llm=st.session_state.llm, prompt=prompt)
 
-    if not docs_all:
-        docs_all.append(
-            LCDocument(
-                page_content="取得可能なニュース記事が見つかりませんでした。収集条件を見直してください。",
-                metadata={"source": "system"},
-            )
-        )
+    # デバッグ・UI表示に使えるメタ情報も返す
+    meta = {
+        "search_query": search_query,
+        "title_count": len(title_corpus.splitlines()) if title_corpus else 0,
+        "url_count": len(url_list) if isinstance(url_list, list) else 0,
+    }
+    logger.info({"build_dynamic_web_llm_chain": meta})
 
-    for doc in docs_all:
-        doc.page_content = adjust_string(doc.page_content)
-        for key in doc.metadata:
-            doc.metadata[key] = adjust_string(str(doc.metadata[key]))
-
-    text_splitter = CharacterTextSplitter(
-        chunk_size=ct.CHUNK_SIZE,
-        chunk_overlap=ct.CHUNK_OVERLAP,
-        separator="\n",
-    )
-    splitted_docs = text_splitter.split_documents(docs_all)
-
-    embeddings = OpenAIEmbeddings()
-    db = Chroma.from_documents(splitted_docs, embedding=embeddings)
-    retriever = db.as_retriever(search_kwargs={"k": ct.TOP_K})
-
-    question_generator_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", ct.SYSTEM_PROMPT_CREATE_INDEPENDENT_TEXT),
-            MessagesPlaceholder("chat_history"),
-            ("human", "{input}"),
-        ]
-    )
-    question_answer_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", ct.SYSTEM_PROMPT_INQUIRY),
-            MessagesPlaceholder("chat_history"),
-            ("human", "{input}"),
-        ]
-    )
-
-    history_aware_retriever = create_history_aware_retriever(
-        st.session_state.llm, retriever, question_generator_prompt
-    )
-    question_answer_chain = create_stuff_documents_chain(st.session_state.llm, question_answer_prompt)
-    rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
-
-    return rag_chain
+    return chain, meta
 
 
+def get_or_create_topic_chain(topic_key: str, query: str):
+    if "topic_llm_chains" not in st.session_state:
+        st.session_state.topic_llm_chains = {}
+
+    if topic_key not in st.session_state.topic_llm_chains:
+        st.session_state.topic_llm_chains[topic_key] = build_topic_llm_chain(topic_key, query)
+
+    return st.session_state.topic_llm_chains[topic_key]
+
+def run_category_doc_chain(topic_key: str, query: str, user_input: str):
+    chain = get_or_create_topic_chain(topic_key, query)
+    result = chain.invoke({"user_input": user_input})
+
+    # LLMChainの戻りは text キーが一般的
+    answer = result.get("text", "") if isinstance(result, dict) else str(result)
+
+    # 既存の会話履歴運用に合わせる
+    if "chat_history" in st.session_state:
+        st.session_state.chat_history.extend([
+            HumanMessage(content=user_input),
+            AIMessage(content=answer),
+        ])
+
+    return answer
+
+"""
+TODO: 後で消す
+"""
 def run_politics_doc_chain(param):
     """
     政治に関するデータ参照に特化したTool設定用の関数
@@ -447,7 +310,7 @@ def run_politics_doc_chain(param):
 
     return ai_msg["answer"]
 
-def run_economy_doc_chain(param):
+def run_economics_doc_chain(param):
     """
     経済に関するデータ参照に特化したTool設定用の関数
 
@@ -600,7 +463,7 @@ def run_beauty_doc_chain(param):
 
     return ai_msg["answer"]
 
-def run_groumet_doc_chain(param):
+def run_gourmet_doc_chain(param):
     """
     グルメに関するデータ参照に特化したTool設定用の関数
 
@@ -924,6 +787,10 @@ def run_all_doc_chain(param):
     st.session_state.chat_history.extend([HumanMessage(content=param), AIMessage(content=ai_msg["answer"])])
 
     return ai_msg["answer"]
+
+"""
+TODO: 後で消す　終わり
+"""
 
 def delete_old_conversation_log(result):
     """

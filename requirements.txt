@@ -150,4 +150,5 @@ zipp==3.21.0
 zstandard==0.23.0
 
 # 追加で必要なライブラリ
-beautifulsoup4==4.13.3
+#beautifulsoup4==4.13.3
+feedparser==6.0.11

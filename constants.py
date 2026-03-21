@@ -66,6 +66,10 @@ CHUNK_OVERLAP = 50
 TOP_K = 5
 RETRIEVER_WEIGHTS = [0.5, 0.5]
 
+WEB_RAG_MAX_URLS = 6
+WEB_RAG_CHUNK_SIZE = 800
+WEB_RAG_CHUNK_OVERLAP = 120
+
 
 # ==========================================
 # トークン関連
@@ -81,7 +85,8 @@ RAG_TOP_FOLDER_PATH = "./data/rag"
 
 SUPPORTED_EXTENSIONS = {
     ".pdf": PyMuPDFLoader,
-    ".docx": Docx2txtLoader,
+  
+  ".docx": Docx2txtLoader,
     ".txt": lambda path: TextLoader(path, encoding="utf-8")
 }
 
@@ -103,14 +108,13 @@ DB_NAMES = {
     DB_SERVICE_PATH: f"{RAG_TOP_FOLDER_PATH}/service",
     DB_CUSTOMER_PATH: f"{RAG_TOP_FOLDER_PATH}/customer"
 }
-"""
 
 POLITICS_URL_LIST = ["https://news.web.nhk/newsweb/genre/politics", "https://www.jiji.com/jc/c?g=pol", "https://www.nikkei.com/news/category/politics/", "https://www.asahi.com/politics/?iref=pc_gnavi", "https://mainichi.jp/seiji/", "https://www.yomiuri.co.jp/politics/", "https://toyokeizai.net/list/genre/economy-and-politics", "https://newspicks.com/theme-news/economic/"]
 ECONOMICS_URL_LIST = ["https://www.bloomberg.com/jp", "https://www.cnbc.com/world/?region=world", "https://www.ft.com/", "https://news.yahoo.co.jp/topics/business", "https://news.web.nhk/newsweb/genre/business", "https://www.jiji.com/jc/c?g=eco", "https://www.nikkei.com/economy/", "https://www.asahi.com/business/?iref=pc_gnavi", "https://mainichi.jp/biz/", "https://www.yomiuri.co.jp/economy/", "https://toyokeizai.net/list/genre/economy-and-politics", "https://newspicks.com/theme-news/market/", ]
 INTERNATIONAL_URL_LIST = ["https://www.reuters.com/", "https://apnews.com/", "https://www.bbc.com/news", "https://news.yahoo.co.jp/categories/world", "https://news.web.nhk/newsweb/genre/international", "https://www.jiji.com/jc/c?g=int", "https://www.nikkei.com/international/", "https://www.asahi.com/international/?iref=pc_gnavi", "https://mainichi.jp/world/", "https://www.yomiuri.co.jp/world/", "https://newspicks.com/theme-news/20191/"]
 TECHNOLOGY_URL_LIST = ["https://ai.watch.impress.co.jp/", "https://edu.watch.impress.co.jp/", "https://cloud.watch.impress.co.jp/", "https://pc.watch.impress.co.jp/", "https://internet.watch.impress.co.jp/", "https://www.verdict.co.uk/", "https://techcrunch.com/", "https://www.nature.com/news", "https://www.science.org/news", "https://arxiv.org/", "https://www.nasa.gov/news", "https://www.itmedia.co.jp/", "https://www.technologyreview.com/", "https://news.yahoo.co.jp/categories/it", "https://news.yahoo.co.jp/categories/science", "https://news.web.nhk/newsweb/genre/science-culture", "https://www.asahi.com/tech_science/?iref=pc_gnavi", "https://mainichi.jp/english/science/", "https://www.yomiuri.co.jp/science/", "https://newspicks.com/theme-news/technology/", "https://www.bbc.com/technology", "https://www.bloomberg.com/jp/technology", ]
 BUSINESS_URL_LIST = ["https://www.nikkei.com/business/", "https://toyokeizai.net/list/genre/business", "https://newspicks.com/theme-news/business/", "https://www.reuters.com/business/", "https://apnews.com/business", "https://www.bbc.com/business", "https://www.cnbc.com/business/"]
-WEATHER_URL_LIST = ["https://weather.yahoo.co.jp/weather/", "https://www.jma.go.jp/jp/yoho/", "https://weathernews.jp/", "https://weathernews.jp/onebox/radar/?fm=header", "https://weathernews.jp/onebox/typhoon/?fm=header", "https://weathernews.jp/quake/?fm=header", "", "https://weathernews.jp/pollen/?fm=header", "https://tenki.jp/", "https://tenki.jp/bousai/warn/", "https://www.msn.com/ja-jp/weather/forecast/"]
+WEATHER_URL_LIST = ["https://weather.yahoo.co.jp/weather/", "https://www.jma.go.jp/jp/yoho/", "https://weathernews.jp/", "https://weathernews.jp/onebox/radar/?fm=header", "https://weathernews.jp/onebox/typhoon/?fm=header", "https://weathernews.jp/quake/?fm=header", "https://weathernews.jp/pollen/?fm=header", "https://tenki.jp/", "https://tenki.jp/bousai/warn/", "https://www.msn.com/ja-jp/weather/forecast/"]
 HEALTH_URL_LIST = ["https://www.ozmall.co.jp/healthcare/", "https://www.cdc.gov/", "https://www.who.int/", "https://www.nih.gov/", "https://www.mhlw.go.jp/stf/seisakunitsuite/bunya/kenkou_iryou/kenkou/", "https://news.yahoo.co.jp/categories/life", "https://news.web.nhk/newsweb/genre/life", "https://www.jiji.com/jc/list?g=newitem", "https://www.nikkei.com/lifestyle/medical-health/", "https://www.asahi.com/apital/?iref=pc_gnavi", "https://mainichi.jp/medical/", "https://mainichi.jp/welfare/", "https://www.yomiuri.co.jp/medical/", "https://toyokeizai.net/list/genre/life", "https://www.bbc.com/health", "https://www.cnbc.com/health-and-science/", "https://www.ncgm.go.jp/", "https://www.ncc.go.jp/jp/index.html", "https://www.med.or.jp/", "https://www.amed.go.jp/", "https://medical.nikkeibp.co.jp/", "https://medicalnote.jp/", "https://www.qlife.jp/", "https://medicalnote.jp/nj_articles", "https://healthwell.jp/"]
 FASHION_URL_LIST = ["https://kstyle.com/category.ksn?categoryCode=FS", "https://www.vogue.com/", "https://www.vogue.com/business", "https://www.vogue.com/business/fashion", "https://wwd.com/", "https://wwd.com/fashion-news/", "https://wwd.com/beauty-industry-news/", "https://wwd.com/menswear-news/", "https://www.businessoffashion.com/", "https://fashionista.com/", "https://www.fashionsnap.com/", "https://www.wwdjapan.com/", "https://www.fashion-press.net/", "https://www.elle.com/jp/fashion", "https://www.gqjapan.jp/fashion", "https://news.yahoo.co.jp/categories/life", "https://news.web.nhk/newsweb/genre/life", "https://www.jiji.com/jc/list?g=newitem", "https://www.nikkei.com/lifestyle/life/", "https://www.nikkei.com/lifestyle/trend/", "https://www.asahi.com/special/fashion/?iref=pc_gnavi", "https://mainichi.jp/life/", "https://www.yomiuri.co.jp/life/", "https://toyokeizai.net/list/genre/life", "https://apnews.com/hub/fashion", "https://www.cnbc.com/fashion/", ]
 BEAUTY_URL_LIST = ["https://www.oricon.co.jp/category/beauty/", "https://www.ozmall.co.jp/beauty/", "https://www.ozmall.co.jp/cosme/haircare/", "https://www.vogue.com/beauty", "https://www.elle.com/beauty", "https://www.glamour.com/beauty", "https://www.allure.com/", "https://www.cosmeticsdesign.com/", "https://www.cosmeticsbusiness.com/", "https://www.cosmeticsandtoiletries.com/",  "https://www.asahi.com/beauty/?iref=pc_gnavi", "https://wwd.com/beauty-industry-news/", "https://fashionista.com/beauty", "https://www.fashionsnap.com/beauty/", "https://www.wwdjapan.com/category/beauty", "https://www.elle.com/jp/beauty/", "https://www.cosme.net/", "https://maquia.hpplus.jp/", "https://i-voce.jp/", "https://www.biteki.com/", "https://www.fashionsnap.com/beauty", "https://www.elle.com/jp/beauty",]
@@ -126,6 +130,30 @@ SPORTS_URL_LIST = ["https://www.daily.co.jp/general/", "https://www.daily.co.jp/
 OUTDOOR_URL_LIST = ["https://www.jiji.com/jc/car", "https://www.yomiuri.co.jp/hobby/atcars/", "https://car.watch.impress.co.jp/", "https://www.oricon.co.jp/category/spot/", "https://encount.press/archives/category/vehicle/", "https://press.outdoorday.jp/", "https://www.sanspo.com/fishing/", "https://www.motormagazine.co.jp/", "https://www.webcg.net/", "https://outdoorgearzine.com/", "https://www.bepal.net/", "https://www.hokkaido-np.co.jp/outdoor", "https://forestoutdoor.net/", "https://yamania.net/", "https://www.nachu-magazine.com/", "https://www.nachu-magazine.com/tag/travel/"]
 EDUCATION_URL_LIST = ["https://www.nikkei.com/lifestyle/childcare/", "https://www.asahi.com/edu/?iref=pc_gnavi", "https://mainichi.jp/edu/", "https://www.yomiuri.co.jp/life/kosodate/", "https://toyokeizai.net/list/genre/career-and-education", "https://newspicks.com/theme-news/education/", "https://www.gov-online.go.jp/parenting_education/", "https://dot.asahi.com/aerakids", "https://www.kknews.co.jp/", "https://resemom.jp/", "https://hugkum.sho.jp/", "https://benesse.jp/", "https://kodomo-manabi-labo.net/"]
 CAREER_URL_LIST = ["https://www.nikkei.com/lifestyle/workstyle/", "https://toyokeizai.net/list/genre/career-and-education", "https://newspicks.com/theme-news/education/", "https://newspicks.com/theme-news/9984/", "https://www.reuters.com/business/", "https://apnews.com/business", "https://www.bbc.com/business", "https://www.bloomberg.com/jp/companies", "https://www.ft.com/companies", "https://www.ft.com/markets", "https://www.ft.com/work-careers", "https://www.cnbc.com/business/", "https://www.businessinsider.jp/?utm_source=chatgpt.com", "https://jbpress.ismedia.jp/", "https://business.nikkei.com/", "https://diamond.jp/", "https://president.jp/", "https://www.itmedia.co.jp/business", "https://newspicks.com/", "https://logmi.jp/", "https://news.mynavi.jp/", "https://news.mynavi.jp/top/kurashi/jobhunting/"]
+"""
+
+POLITICS_QUERY = '政治 OR 政治家 OR 政策 OR 選挙 OR 国会 OR 内閣 OR 外交 OR 国際関係'
+ECONOMICS_QUERY = '経済 OR 経済政策 OR 景気 OR 金融 OR 財政 OR 企業 OR 市場'
+INTERNATIONAL_QUERY = '国際 OR 国際情勢 OR 国際関係 OR 国際協力 OR 国際紛争 OR 国際機関'
+TECHNOLOGY_QUERY = '技術 OR テクノロジー OR IT OR AI OR 半導体 OR IoT OR ロボット OR バイオ OR 宇宙 OR サイエンス'
+BUSINESS_QUERY = 'ビジネス OR 企業 OR 経営 OR 起業 OR スタートアップ OR マーケティング OR 経済動向'
+WEATHER_QUERY = '天気 OR 気象 OR 台風 OR 地震 OR 災害 OR 気候変動 OR 季節の変わり目'
+HEALTH_QUERY = '健康 OR 医療 OR 病気 OR ウイルス OR ワクチン OR ダイエット OR メンタルヘルス OR フィットネス'
+FASHION_QUERY = 'ファッション OR トレンド OR ブランド OR コーディネート OR シーズン OR スタイル OR 流行'
+BEAUTY_QUERY = '美容 OR コスメ OR スキンケア OR メイク OR ヘアケア OR 美容法 OR 美容トレンド'
+GOURMET_QUERY = 'グルメ OR 食べ物 OR レストラン OR カフェ OR 料理 OR スイーツ OR 飲食店 OR 食文化'
+SIGHTSEEING_QUERY = '観光 OR 旅行 OR 旅 OR 観光地 OR ホテル OR 温泉 OR 観光スポット OR 旅行トレンド'
+ANIME_QUERY = 'アニメ OR 声優 OR アニメ映画 OR アニメシリーズ OR アニメニュース'
+MANGA_QUERY = '漫画 OR コミック OR マンガ OR 漫画家 OR 漫画作品 OR 漫画ニュース OR 漫画トレンド OR ラノベ'
+MOVIE_QUERY = '映画 OR ドラマ OR 映画館 OR 映画レビュー OR 映画ニュース OR 映画トレンド OR ドラマニュース OR ドラマトレンド OR 映画ランキング OR ドラマランキング OR 映画賞 OR ドラマ賞 OR ハリウッド OR 邦画 OR 洋画 OR 韓国ドラマ OR 海外ドラマ'
+GAME_QUERY = 'ゲーム OR ゲーム機 OR ゲームソフト OR eスポーツ OR ゲームニュース OR ゲームトレンド'
+MUSIC_QUERY = '音楽 OR アーティスト OR バンド OR アルバム OR ライブ OR 音楽ニュース OR 音楽トレンド OR 音楽チャート OR 音楽フェス OR 音楽ランキング OR 音楽配信 OR 音楽ストリーミング OR クラシック OR ジャズ OR ロック OR ポップス OR ヒップホップ OR EDM OR K-POP OR J-POP OR 洋楽 OR 邦楽 OR アニソン OR ボカロ'
+ENTERTAINMENT_QUERY = '芸能 OR エンタメ OR 芸能人 OR タレント OR ドラマ OR 映画 OR 音楽 OR 芸能ニュース OR エンタメトレンド'
+SPORTS_QUERY = 'スポーツ OR サッカー OR 野球 OR バスケットボール OR テニス OR ゴルフ OR スポーツニュース OR スポーツトレンド'
+OUTDOOR_QUERY = 'アウトドア OR キャンプ OR 登山 OR 釣り OR 自転車 OR 車 OR バイク OR アウトドアニュース OR アウトドアトレンド'
+EDUCATION_QUERY = '教育 OR 学校 OR 大学 OR 教育政策 OR 教育改革 OR 教育トレンド'
+CAREER_QUERY = '働き方 OR キャリア OR 転職 OR 就職 OR 仕事 OR 職場 OR キャリアアップ OR キャリアトレンド'
+
 
 AI_AGENT_MODE_ON = "利用する"
 AI_AGENT_MODE_OFF = "利用しない"
@@ -179,7 +207,135 @@ SEARCH_CAREER_INFO_TOOL_DESCRIPTION = "働き方・キャリアに関する情�
 SEARCH_WEB_INFO_TOOL_NAME = "search_web_tool"
 SEARCH_WEB_INFO_TOOL_DESCRIPTION = "Web検索が必要と判断した場合に使う"
 
-SERVICE_DESCRIPTION = "個人や法人が簡単にオリジナルデザインのTシャツを作成し、環境に配慮した素材で製品化できるWebサービス"
+# Tool設定を1か所で管理
+TOPIC_TOOL_CONFIGS = [
+    {
+        "key": "politics",
+        "query": POLITICS_QUERY,
+        "tool_name": SEARCH_POLITICS_INFO_TOOL_NAME,
+        "tool_description": SEARCH_POLITICS_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "economics",
+        "query": ECONOMICS_QUERY,
+        "tool_name": SEARCH_ECONOMICS_INFO_TOOL_NAME,
+        "tool_description": SEARCH_ECONOMICS_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "international",
+        "query": INTERNATIONAL_QUERY,
+        "tool_name": SEARCH_INTERNATIONAL_INFO_TOOL_NAME,
+        "tool_description": SEARCH_INTERNATIONAL_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "technology",
+        "query": TECHNOLOGY_QUERY,
+        "tool_name": SEARCH_TECHNOLOGY_INFO_TOOL_NAME,
+        "tool_description": SEARCH_TECHNOLOGY_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "business",
+        "query": BUSINESS_QUERY,
+        "tool_name": SEARCH_BUSINESS_INFO_TOOL_NAME,
+        "tool_description": SEARCH_BUSINESS_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "weather",
+        "query": WEATHER_QUERY,
+        "tool_name": SEARCH_WEATHER_INFO_TOOL_NAME,
+        "tool_description": SEARCH_WEATHER_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "health",
+        "query": HEALTH_QUERY,
+        "tool_name": SEARCH_HEALTH_INFO_TOOL_NAME, 
+        "tool_description": SEARCH_HEALTH_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "fashion",
+        "query": FASHION_QUERY,
+        "tool_name": SEARCH_FASHION_INFO_TOOL_NAME,
+        "tool_description": SEARCH_FASHION_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "beauty",
+        "query": BEAUTY_QUERY,
+        "tool_name": SEARCH_BEAUTY_INFO_TOOL_NAME,
+        "tool_description": SEARCH_BEAUTY_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "gourmet",
+        "query": GOURMET_QUERY,
+        "tool_name": SEARCH_GOURMET_INFO_TOOL_NAME,
+        "tool_description": SEARCH_GOURMET_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "sightseeing",
+        "query": SIGHTSEEING_QUERY,
+        "tool_name": SEARCH_SIGHTSEEING_INFO_TOOL_NAME,
+        "tool_description": SEARCH_SIGHTSEEING_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "anime",
+        "query": ANIME_QUERY,
+        "tool_name": SEARCH_ANIME_INFO_TOOL_NAME,
+        "tool_description": SEARCH_ANIME_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "manga",
+        "query": MANGA_QUERY,
+        "tool_name": SEARCH_MANGA_INFO_TOOL_NAME,
+        "tool_description": SEARCH_MANGA_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "movie",
+        "query": MOVIE_QUERY,
+        "tool_name": SEARCH_MOVIE_INFO_TOOL_NAME,
+        "tool_description": SEARCH_MOVIE_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "game",
+        "query": GAME_QUERY,
+        "tool_name": SEARCH_GAME_INFO_TOOL_NAME,
+        "tool_description": SEARCH_GAME_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "music",
+        "query": MUSIC_QUERY,
+        "tool_name": SEARCH_MUSIC_INFO_TOOL_NAME,
+        "tool_description": SEARCH_MUSIC_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "entertainment",
+        "query": ENTERTAINMENT_QUERY,
+        "tool_name": SEARCH_ENTERTAINMENT_INFO_TOOL_NAME,
+        "tool_description": SEARCH_ENTERTAINMENT_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "sports",
+        "query": SPORTS_QUERY,
+        "tool_name": SEARCH_SPORTS_INFO_TOOL_NAME,
+        "tool_description": SEARCH_SPORTS_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "outdoor",
+        "query": OUTDOOR_QUERY,
+        "tool_name": SEARCH_OUTDOOR_INFO_TOOL_NAME,
+        "tool_description": SEARCH_OUTDOOR_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "education",
+        "query": EDUCATION_QUERY,
+        "tool_name": SEARCH_EDUCATION_INFO_TOOL_NAME,
+        "tool_description": SEARCH_EDUCATION_INFO_TOOL_DESCRIPTION,
+    },
+    {
+        "key": "career",
+        "query": CAREER_QUERY,
+        "tool_name": SEARCH_CAREER_INFO_TOOL_NAME,
+        "tool_description": SEARCH_CAREER_INFO_TOOL_DESCRIPTION,
+    },
+]
 
 # ==========================================
 # マーケティング戦略Tool関連
@@ -215,6 +371,79 @@ CSV_ENCODING = "utf-8-sig"
 SYSTEM_PROMPT_CREATE_INDEPENDENT_TEXT = "会話履歴と最新の入力をもとに、会話履歴なしでも理解できる独立した入力テキストを生成してください。"
 
 NO_DOC_MATCH_MESSAGE = "回答に必要な情報が見つかりませんでした。弊社に関する質問・要望を、入力内容を変えて送信してください。"
+
+SYSTEM_PROMPT_SUMMARIZE_ARTICLE = """
+以下の記事のタイトルなどから、3-5文で日本語で簡潔に要約してください。
+
+記事内容：
+{content}
+
+要約：
+"""
+
+SYSTEM_PROMPT_RAG_ANSWER = """
+あなたはニュース要約アシスタントです。
+以下はトピック {topic_key} の最新ニュース要約です。
+ユーザー質問に対し、以下の情報を根拠に日本語で具体的に回答してください。
+
+要約:
+{topic_summary}
+
+タイトル一覧:
+{title_corpus}
+
+参照元:
+{source_list}
+
+URL一覧:
+{url_list}
+
+ユーザー質問:
+{{user_input}}
+
+回答ルール:
+- 上記情報を根拠に日本語で回答
+- 不明な点は不明と明示
+- 可能な限り具体的に、わかりやすく回答
+- 参照元やURLも必ず回答に含める
+"""
+
+SYSTEM_PROMPT_WEB_QUERY_GEN = """
+あなたはWeb検索クエリ作成アシスタントです。
+ユーザー質問に対し、検索精度が高い日本語クエリを1つだけ生成してください。
+余計な説明は不要で、検索クエリ本文のみ返してください。
+"""
+
+SYSTEM_PROMPT_WEB_RAG_ANSWER = """
+あなたはWebニュース要約アシスタントです。
+以下の情報を根拠に、日本語で具体的に回答してください。
+
+初回ユーザープロンプト:
+{original_prompt}
+
+生成した検索クエリ:
+{search_query}
+
+ニュース要約:
+{topic_summary}
+
+ニュースタイトル一覧:
+{title_corpus}
+
+参照元一覧:
+{source_text}
+
+参照URL一覧:
+{url_text}
+
+ユーザー質問:
+{{user_input}}
+
+回答ルール:
+- 根拠が弱い場合は断定しない
+- 可能な限り参照元やURLを示す
+- 不明点は不明と明示する
+"""
 
 SYSTEM_PROMPT_INQUIRY = """
     あなたは社内文書を基に、顧客からの問い合わせに対応するアシスタントです。
