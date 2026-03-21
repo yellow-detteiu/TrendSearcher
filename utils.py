@@ -265,6 +265,31 @@ def build_dynamic_web_llm_chain(user_prompt: str, max_articles_per_topic: int = 
     return chain, meta
 
 
+def run_web_search_tool(user_input: str) -> str:
+    """
+    Web検索Tool用の薄いラッパー。
+    ユーザー入力から検索クエリを整形してから検索する。
+    """
+    logger = logging.getLogger(ct.LOGGER_NAME)
+
+    search_query = user_input.strip()
+    if "llm" in st.session_state and st.session_state.llm is not None:
+        try:
+            generated_query = _generate_web_search_query(user_input)
+            if generated_query:
+                search_query = generated_query
+        except Exception as e:
+            logger.warning(f"Web検索クエリ生成に失敗したため元の入力を使用します: {e}")
+
+    search_runner = st.session_state.get("search")
+    if search_runner is None:
+        search_runner = SerpAPIWrapper(params={"engine": "google", "hl": "ja", "gl": "jp"})
+        st.session_state.search = search_runner
+
+    result = search_runner.run(search_query)
+    return f"検索クエリ: {search_query}\n\n検索結果:\n{result}"
+
+
 def get_or_create_topic_chain(topic_key: str, query: str):
     if "topic_llm_chains" not in st.session_state:
         st.session_state.topic_llm_chains = {}

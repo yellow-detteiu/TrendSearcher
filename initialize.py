@@ -17,6 +17,7 @@ from langchain_community.callbacks.streamlit import StreamlitCallbackHandler
 from langchain import SerpAPIWrapper
 from langchain.tools import Tool
 from langchain.agents import AgentType, initialize_agent
+from langchain.schema import SystemMessage
 import utils
 import constants as ct
 from functools import partial
@@ -139,7 +140,13 @@ def initialize_agent_executor():
                     cfg["key"],
                     cfg["query"],
                 ),
-                description=cfg["tool_description"],
+                description=(
+                    f"{cfg['tool_description']}。"
+                    "このToolを最優先で使うのは、そのカテゴリの最新動向や最近の話題を聞かれたとき。"
+                    "入力にはユーザーの元の質問をそのまま渡す。"
+                    f"内部では次の観点で関連ニュースを収集する: {cfg['query']}。"
+                    "質問が広くてもカテゴリが合っていれば search_web_tool より先にこのToolを使う。"
+                ),
             )
         )
 
@@ -147,8 +154,12 @@ def initialize_agent_executor():
     tools.append(
         Tool(
             name=ct.SEARCH_WEB_INFO_TOOL_NAME,
-            func=search.run,
-            description=ct.SEARCH_WEB_INFO_TOOL_DESCRIPTION,
+            func=utils.run_web_search_tool,
+            description=(
+                f"{ct.SEARCH_WEB_INFO_TOOL_DESCRIPTION}。"
+                "どのカテゴリToolにも当てはまらない質問、またはカテゴリToolの結果を補足したい場合のみ使う。"
+                "入力にはユーザーの元の質問をそのまま渡す。"
+            ),
         )
     )
 
@@ -159,6 +170,9 @@ def initialize_agent_executor():
         llm=st.session_state.llm,
         tools=tools,
         agent=AgentType.OPENAI_FUNCTIONS,
+        agent_kwargs={
+            "system_message": SystemMessage(content=ct.AGENT_TOOL_SELECTION_PROMPT),
+        },
         max_iterations=ct.AI_AGENT_MAX_ITERATIONS,
         early_stopping_method="generate",
         handle_parsing_errors=True,
