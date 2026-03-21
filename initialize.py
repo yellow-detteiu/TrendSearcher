@@ -153,10 +153,12 @@ def initialize_agent_executor():
     )
 
     # Agent Executorの作成
+    # OPENAI_FUNCTIONS: OpenAI APIのネイティブなfunction calling機能を使用するため、
+    # ZERO_SHOT_REACT_DESCRIPTIONで発生するテキストパースエラー（ツール名に引数が混入するなど）を防げる
     st.session_state.agent_executor = initialize_agent(
         llm=st.session_state.llm,
         tools=tools,
-        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+        agent=AgentType.OPENAI_FUNCTIONS,
         max_iterations=ct.AI_AGENT_MAX_ITERATIONS,
         early_stopping_method="generate",
         handle_parsing_errors=True,
