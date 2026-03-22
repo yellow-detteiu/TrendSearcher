@@ -132,9 +132,10 @@ if chat_message:
     # ==========================================
     # 4. LLMからの回答表示
     # ==========================================
+    current_sources = st.session_state.get("last_sources", {})
     with st.chat_message("assistant", avatar=ct.AI_ICON_FILE_PATH):
         try:
-            cn.display_llm_response(result)
+            cn.display_llm_response(result, sources=current_sources)
 
             logger.info({"message": result})
         except Exception as e:
@@ -145,8 +146,13 @@ if chat_message:
     # ==========================================
     # 5. 会話ログへの追加
     # ==========================================
+    source_snapshot = {
+        "title_list": list(current_sources.get("title_list", [])) if isinstance(current_sources, dict) else [],
+        "url_list": list(current_sources.get("url_list", [])) if isinstance(current_sources, dict) else [],
+        "source_list": list(current_sources.get("source_list", [])) if isinstance(current_sources, dict) else [],
+    }
     st.session_state.messages.append({"role": "user", "content": chat_message})
-    st.session_state.messages.append({"role": "assistant", "content": result})
+    st.session_state.messages.append({"role": "assistant", "content": result, "sources": source_snapshot})
 
 
 ############################################################

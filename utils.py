@@ -126,6 +126,14 @@ def _make_title_corpus(news_items: List[dict]) -> str:
         
     return title_corpus_tmp
 
+def _make_title_list(news_items: List[dict]) -> list:
+    title_list_tmp = []
+    for topic, items in news_items.items():
+        for i, x in enumerate(items, 1):
+            title_list_tmp.append(x['title'])
+
+    return title_list_tmp
+
 def _make_url_list(news_items: List[dict]) -> str:
     url_list_tmp = []
     for topic, items in news_items.items():
@@ -178,6 +186,7 @@ def build_topic_llm_chain(topic_key: str, query: str, max_articles_per_topic: in
 
     # 2. タイトル一覧文字列
     title_corpus = _make_title_corpus(news_items)
+    title_list = _make_title_list(news_items)
     url_list = _make_url_list(news_items)
     source_list = _make_source_list(news_items)
 
@@ -185,6 +194,7 @@ def build_topic_llm_chain(topic_key: str, query: str, max_articles_per_topic: in
     if "topic_sources" not in st.session_state:
         st.session_state.topic_sources = {}
     st.session_state.topic_sources[topic_key] = {
+        "title_list": title_list if isinstance(title_list, list) else [],
         "url_list": url_list if isinstance(url_list, list) else [],
         "source_list": source_list if isinstance(source_list, list) else [],
     }

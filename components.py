@@ -61,8 +61,12 @@ def display_initial_ai_message():
     AIメッセージの初期表示
     """
     with st.chat_message("assistant", avatar=ct.AI_ICON_FILE_PATH):
-        st.success("こちらは政治、経済、グルメ、ファッションなど様々なトピックについての最新情報をお届けする生成AIチャットボットです。AIエージェントの利用有無を選択し、画面下部のチャット欄から質問してください。")
-        st.warning("具体的に入力したほうが期待通りの回答を得やすいです。", icon=ct.WARNING_ICON)
+        st.success("""
+                   こちらは政治、経済、グルメ、ファッションなど様々なトピックについての最新情報をお届けする生成AIチャットボットです。AIエージェントの利用有無を選択し、画面下部のチャット欄から質問してください。
+                   例えば、「最近のテクノロジー業界のトレンドを教えて」といった質問に対して、最新のニュースやトレンドを踏まえた回答を提供します。AIエージェント機能をONにすると、より高度な回答が得られる可能性がありますので、ぜひお試しください。
+                   対応可能なトピック：政治、経済、国際、テクノロジー、ビジネス、天気、健康、ファッション、美容、グルメ、観光、アニメ、漫画、映画・ドラマ、ゲーム、音楽、芸能・エンタメ、スポーツ、アウトドア、教育、働き方・キャリア
+                   """)
+        st.warning("具体的すぎる内容に対する回答は得られない場合もあります。", icon=ct.WARNING_ICON)
 
 
 def display_conversation_log(chat_message):
@@ -74,6 +78,7 @@ def display_conversation_log(chat_message):
         if message["role"] == "assistant":
             with st.chat_message(message["role"], avatar=ct.AI_ICON_FILE_PATH):
                 st.markdown(message["content"])
+                _display_source_links(message.get("sources", {}), expander_title="参照元を表示")
                 # フィードバックエリアの表示
                 display_after_feedback_message(index, chat_message)
         else:
@@ -120,27 +125,48 @@ def display_after_feedback_message(index, chat_message):
             st.session_state.feedback_no_reason_send_flg = False
             st.caption(ct.FEEDBACK_THANKS_MESSAGE)
 
-def display_llm_response(result):
+def _display_source_links(sources, expander_title="参照元を表示"):
+    title_list = sources.get("title_list", []) if isinstance(sources, dict) else []
+    url_list = sources.get("url_list", []) if isinstance(sources, dict) else []
+    source_list = sources.get("source_list", []) if isinstance(sources, dict) else []
+    if not title_list and not url_list and not source_list:
+        return
+
+    with st.expander(expander_title, expanded=False):
+        max_len = max(len(title_list), len(url_list), len(source_list))
+        for i in range(max_len):
+            title = title_list[i] if i < len(title_list) else ""
+            url = url_list[i] if i < len(url_list) else ""
+            src = source_list[i] if i < len(source_list) else ""
+
+            if title and src:
+                label = f"{title}（{src}）"
+            elif title:
+                label = title
+            elif src:
+                label = src
+            else:
+                label = f"ソース{i+1}"
+
+            if url:
+                st.markdown(f"{i+1}. [{label}]({url})")
+            else:
+                st.markdown(f"{i+1}. {label}")
+
+
+def display_llm_response(result, sources=None):
     """
     LLMからの回答表示
 
     Args:
         result: LLMからの回答
+        sources: 参照元情報（未指定時は session_state.last_sources を使用）
     """
     st.markdown(result)
 
     # 参照元URL・ソース一覧の表示
-    sources = st.session_state.get("last_sources", {})
-    url_list = sources.get("url_list", [])
-    source_list = sources.get("source_list", [])
-    if url_list:
-        with st.expander("参照元を表示", expanded=False):
-            for i, (url, src) in enumerate(zip(url_list, source_list), 1):
-                label = src if src else f"ソース{i}"
-                if url:
-                    st.markdown(f"{i}. [{label}]({url})")
-                else:
-                    st.markdown(f"{i}. {label}")
+    source_payload = sources if sources is not None else st.session_state.get("last_sources", {})
+    _display_source_links(source_payload, expander_title="参照元を表示")
 
     # フィードバックボタンを表示する場合のみ、メッセージ表示
     if st.session_state.contact_mode == ct.CONTACT_MODE_OFF:
