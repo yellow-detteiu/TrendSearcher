@@ -246,6 +246,7 @@ def build_dynamic_web_llm_chain(user_prompt: str, max_articles_per_topic: int = 
 
     # 3) タイトル・URL・ソースを整形
     title_corpus = _make_title_corpus(news_items)
+    title_list = _make_title_list(news_items)
     url_list = _make_url_list(news_items)
     source_list = _make_source_list(news_items)
 
@@ -277,6 +278,9 @@ def build_dynamic_web_llm_chain(user_prompt: str, max_articles_per_topic: int = 
         "search_query": search_query,
         "title_count": len(title_corpus.splitlines()) if title_corpus else 0,
         "url_count": len(url_list) if isinstance(url_list, list) else 0,
+        "title_list": title_list if isinstance(title_list, list) else [],
+        "url_list": url_list if isinstance(url_list, list) else [],
+        "source_list": source_list if isinstance(source_list, list) else [],
     }
     logger.info({"build_dynamic_web_llm_chain": meta})
 
@@ -881,13 +885,33 @@ def execute_agent_or_chain(chat_message):
         # Agent Executorの実行（AIエージェント機能を使う場合は、Toolとして設定した関数内で会話履歴への追加処理を実施）
         result = st.session_state.agent_executor.invoke({"input": chat_message}, {"callbacks": [st_callback]})
         response = result["output"]
+        # 非エージェントモード用に last_sources をクリア（ユーザー質問では生成されるため不要）
+        st.session_state.last_sources = {}
     # AIエージェントを利用しない場合
     else:
-        # RAGのChainを実行
-        result = st.session_state.rag_chain.invoke({"input": chat_message, "chat_history": st.session_state.chat_history})
-        # 会話履歴への追加
-        st.session_state.chat_history.extend([HumanMessage(content=chat_message), AIMessage(content=result["answer"])])
-        response = result["answer"]
+        # ユーザー入力から動的に検索クエリを生成し、ニュース取得 + 要約するチェーンを構築
+        try:
+            chain, meta = build_dynamic_web_llm_chain(chat_message, max_articles_per_topic=8)
+            result = chain.invoke({"user_input": chat_message})
+            response = result.get("text", "") if isinstance(result, dict) else str(result)
+            
+            # 参照元情報を last_sources に保存（display_llm_response で表示用）
+            st.session_state.last_sources = {
+                "title_list": meta.get("title_list", []),
+                "url_list": meta.get("url_list", []),
+                "source_list": meta.get("source_list", []),
+            }
+            
+            # 会話履歴への追加
+            if "chat_history" in st.session_state:
+                st.session_state.chat_history.extend([
+                    HumanMessage(content=chat_message),
+                    AIMessage(content=response),
+                ])
+        except Exception as e:
+            logger.error(f"非エージェントモードでのチェーン実行に失敗: {e}", exc_info=True)
+            response = "申し訳ございません。回答生成に失敗しました。"
+            st.session_state.last_sources = {}
 
     # LLMから参照先のデータを基にした回答が行われた場合のみ、フィードバックボタンを表示
     if response != ct.NO_DOC_MATCH_MESSAGE:
