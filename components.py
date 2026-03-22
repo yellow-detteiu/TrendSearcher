@@ -128,6 +128,20 @@ def display_llm_response(result):
         result: LLMからの回答
     """
     st.markdown(result)
+
+    # 参照元URL・ソース一覧の表示
+    sources = st.session_state.get("last_sources", {})
+    url_list = sources.get("url_list", [])
+    source_list = sources.get("source_list", [])
+    if url_list:
+        with st.expander("参照元を表示", expanded=False):
+            for i, (url, src) in enumerate(zip(url_list, source_list), 1):
+                label = src if src else f"ソース{i}"
+                if url:
+                    st.markdown(f"{i}. [{label}]({url})")
+                else:
+                    st.markdown(f"{i}. {label}")
+
     # フィードバックボタンを表示する場合のみ、メッセージ表示
     if st.session_state.contact_mode == ct.CONTACT_MODE_OFF:
         if st.session_state.answer_flg:

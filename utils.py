@@ -181,6 +181,14 @@ def build_topic_llm_chain(topic_key: str, query: str, max_articles_per_topic: in
     url_list = _make_url_list(news_items)
     source_list = _make_source_list(news_items)
 
+    # UI表示用に topic_key ごとのURL・ソース一覧を保存
+    if "topic_sources" not in st.session_state:
+        st.session_state.topic_sources = {}
+    st.session_state.topic_sources[topic_key] = {
+        "url_list": url_list if isinstance(url_list, list) else [],
+        "source_list": source_list if isinstance(source_list, list) else [],
+    }
+
     # 3. タイトル一覧を要約
     topic_summary = _summarize_content(title_corpus)
 
@@ -305,6 +313,11 @@ def run_category_doc_chain(topic_key: str, query: str, user_input: str):
 
     # LLMChainの戻りは text キーが一般的
     answer = result.get("text", "") if isinstance(result, dict) else str(result)
+
+    # 直近回答の参照元情報を last_sources に転記（display_llm_response で使用）
+    st.session_state.last_sources = (
+        st.session_state.get("topic_sources", {}).get(topic_key, {})
+    )
 
     # 既存の会話履歴運用に合わせる
     if "chat_history" in st.session_state:
