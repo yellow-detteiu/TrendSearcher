@@ -158,8 +158,43 @@ def _display_source_links(sources, expander_title="参照元を表示"):
                 st.markdown(f"{i+1}. {label}")
 
 
-def _display_output_actions(result, response_id="latest"):
+def _build_export_text(result, sources=None):
     text = str(result) if result is not None else ""
+
+    payload = sources if isinstance(sources, dict) else {}
+    title_list = payload.get("title_list", [])
+    url_list = payload.get("url_list", [])
+    source_list = payload.get("source_list", [])
+
+    if not title_list and not url_list and not source_list:
+        return text
+
+    lines = [text, "", "---", "", "## 参照元"]
+    max_len = max(len(title_list), len(url_list), len(source_list))
+    for i in range(max_len):
+        title = title_list[i] if i < len(title_list) else ""
+        url = url_list[i] if i < len(url_list) else ""
+        src = source_list[i] if i < len(source_list) else ""
+
+        if title and src:
+            label = f"{title}（{src}）"
+        elif title:
+            label = title
+        elif src:
+            label = src
+        else:
+            label = f"ソース{i+1}"
+
+        if url:
+            lines.append(f"{i+1}. {label} - {url}")
+        else:
+            lines.append(f"{i+1}. {label}")
+
+    return "\n".join(lines)
+
+
+def _display_output_actions(result, sources=None, response_id="latest"):
+    text = _build_export_text(result, sources=sources)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -196,7 +231,7 @@ def display_llm_response(result, sources=None, show_feedback=True, response_id="
     st.markdown(result)
 
     # 回答のコピー・ダウンロード操作
-    _display_output_actions(result, response_id=response_id)
+    _display_output_actions(result, sources=sources, response_id=response_id)
 
     # 参照元URL・ソース一覧の表示
     source_payload = sources if sources is not None else st.session_state.get("last_sources", {})
