@@ -329,9 +329,11 @@ def run_category_doc_chain(topic_key: str, query: str, user_input: str):
     answer = result.get("text", "") if isinstance(result, dict) else str(result)
 
     # 直近回答の参照元情報を last_sources に転記（display_llm_response で使用）
-    st.session_state.last_sources = (
-        st.session_state.get("topic_sources", {}).get(topic_key, {})
-    )
+    st.session_state.last_sources = {
+        "title_list": list(st.session_state.get("topic_sources", {}).get(topic_key, {}).get("title_list", [])),
+        "url_list": list(st.session_state.get("topic_sources", {}).get(topic_key, {}).get("url_list", [])),
+        "source_list": list(st.session_state.get("topic_sources", {}).get(topic_key, {}).get("source_list", [])),
+    }
 
     # 既存の会話履歴運用に合わせる
     if "chat_history" in st.session_state:
