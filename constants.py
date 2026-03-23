@@ -436,8 +436,6 @@ SYSTEM_PROMPT_WEB_RAG_ANSWER = """
 回答ルール:
 - 根拠が弱い場合は断定しない
 - 不明点は不明と明示する
-- 参照元やURLも必ず回答に含める
-- 参照元やURLは、そのまま一覧を出力する
 """
 
 SYSTEM_PROMPT_INQUIRY = """
