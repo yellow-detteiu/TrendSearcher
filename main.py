@@ -135,7 +135,11 @@ if chat_message:
     current_sources = st.session_state.get("last_sources", {})
     with st.chat_message("assistant", avatar=ct.AI_ICON_FILE_PATH):
         try:
-            cn.display_llm_response(result, sources=current_sources)
+            cn.display_llm_response(
+                result,
+                sources=current_sources,
+                response_id=f"current_{len(st.session_state.messages)}",
+            )
 
             logger.info({"message": result})
         except Exception as e:

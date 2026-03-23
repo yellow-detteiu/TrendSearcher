@@ -77,8 +77,12 @@ def display_conversation_log(chat_message):
     for index, message in enumerate(st.session_state.messages):
         if message["role"] == "assistant":
             with st.chat_message(message["role"], avatar=ct.AI_ICON_FILE_PATH):
-                st.markdown(message["content"])
-                _display_source_links(message.get("sources", {}), expander_title="参照元を表示")
+                display_llm_response(
+                    message["content"],
+                    sources=message.get("sources", {}),
+                    show_feedback=False,
+                    response_id=f"log_{index}",
+                )
                 # フィードバックエリアの表示
                 display_after_feedback_message(index, chat_message)
         else:
@@ -154,22 +158,52 @@ def _display_source_links(sources, expander_title="参照元を表示"):
                 st.markdown(f"{i+1}. {label}")
 
 
-def display_llm_response(result, sources=None):
+def _display_output_actions(result, response_id="latest"):
+    text = str(result) if result is not None else ""
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button(
+            label="回答をTXTで保存",
+            data=text.encode("utf-8"),
+            file_name=f"llm_response_{response_id}.txt",
+            mime="text/plain",
+            key=f"download_txt_{response_id}",
+        )
+    with col2:
+        st.download_button(
+            label="回答をMDで保存",
+            data=text.encode("utf-8"),
+            file_name=f"llm_response_{response_id}.md",
+            mime="text/markdown",
+            key=f"download_md_{response_id}",
+        )
+
+    with st.expander("コピー用テキストを表示", expanded=False):
+        st.code(text, language="markdown")
+
+
+def display_llm_response(result, sources=None, show_feedback=True, response_id="latest"):
     """
     LLMからの回答表示
 
     Args:
         result: LLMからの回答
         sources: 参照元情報（未指定時は session_state.last_sources を使用）
+        show_feedback: フィードバック文言を表示するかどうか
+        response_id: ボタンkey用の一意ID
     """
     st.markdown(result)
+
+    # 回答のコピー・ダウンロード操作
+    _display_output_actions(result, response_id=response_id)
 
     # 参照元URL・ソース一覧の表示
     source_payload = sources if sources is not None else st.session_state.get("last_sources", {})
     _display_source_links(source_payload, expander_title="参照元を表示")
 
     # フィードバックボタンを表示する場合のみ、メッセージ表示
-    if st.session_state.contact_mode == ct.CONTACT_MODE_OFF:
+    if show_feedback and st.session_state.contact_mode == ct.CONTACT_MODE_OFF:
         if st.session_state.answer_flg:
             st.caption(ct.FEEDBACK_REQUIRE_MESSAGE)
 
