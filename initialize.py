@@ -67,6 +67,12 @@ def initialize_session_state():
         # フィードバック送信後にThanksメッセージを表示するためのフラグ
         st.session_state.feedback_no_reason_send_flg = False
 
+        st.session_state.youtube_cache = {}
+        st.session_state.youtube_disabled_reason = ""
+
+    if "youtube_disabled_reason" not in st.session_state:
+        st.session_state.youtube_disabled_reason = ""  # 空文字列は有効状態
+
 
 def initialize_session_id():
     """
@@ -122,6 +128,12 @@ def initialize_agent_executor():
 
     if "news_chain_cache" not in st.session_state:
         st.session_state.news_chain_cache = {}
+
+    if "youtube_cache" not in st.session_state:
+        st.session_state.youtube_cache = {}
+
+    if "youtube_disabled_reason" not in st.session_state:
+        st.session_state.youtube_disabled_reason = ""
 
     # エラー防止用
     if "search" not in st.session_state:

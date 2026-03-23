@@ -36,7 +36,7 @@ def display_sidebar():
                 label_visibility="collapsed"
             )
         
-        st.markdown("## 問い合わせモード")
+        st.markdown("## SNSモード")
 
         col1, col2 = st.columns([100, 1])
         with col1:
@@ -52,9 +52,15 @@ def display_sidebar():
         st.code("質問に対して適切と考えられる回答を生成できるまで、生成AIロボット自身に試行錯誤してもらえる機能です。自身の回答に対して評価・改善を繰り返すことで、より優れた回答を生成できます。", wrap_lines=True)
         st.warning("AIエージェント機能を利用する場合、回答生成により多くの時間を要する可能性が高いです。", icon=":material/warning:")
 
-        st.markdown("**【問い合わせモードとは】**")
-        st.code("問い合わせモードを「ON」にしてメッセージを送信すると、担当者に直接届きます。", wrap_lines=True)
+        st.markdown("**【SNSモードとは】**")
+        st.code("SNSモードを「ON」にしてメッセージを送信すると、YouTubeの公開動画情報を優先して収集・要約します。", wrap_lines=True)
 
+        # YouTube API 停止状態の表示
+        if hasattr(st.session_state, 'youtube_disabled_reason') and st.session_state.youtube_disabled_reason:
+            st.error(
+                f"⚠️ {st.session_state.youtube_disabled_reason}",
+                icon="🚫"
+            )
 
 def display_initial_ai_message():
     """
@@ -67,6 +73,7 @@ def display_initial_ai_message():
                    対応可能なトピック：政治、経済、国際、テクノロジー、ビジネス、天気、健康、ファッション、美容、グルメ、観光、アニメ、漫画、映画・ドラマ、ゲーム、音楽、芸能・エンタメ、スポーツ、アウトドア、教育、働き方・キャリア
                    """)
         st.warning("具体的な内容については、「AIエージェント機能の利用有無」を「利用しない」の状態で質問されることをおすすめします。", icon=ct.WARNING_ICON)
+        st.warning("SNSモードをONにすると、YouTubeの公開動画情報も参照して回答します。", icon=ct.WARNING_ICON)
 
 
 def display_conversation_log(chat_message):
@@ -133,6 +140,7 @@ def _display_source_links(sources, expander_title="参照元を表示"):
     title_list = sources.get("title_list", []) if isinstance(sources, dict) else []
     url_list = sources.get("url_list", []) if isinstance(sources, dict) else []
     source_list = sources.get("source_list", []) if isinstance(sources, dict) else []
+
     if not title_list and not url_list and not source_list:
         return
 

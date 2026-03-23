@@ -118,7 +118,7 @@ if chat_message:
                 result = utils.execute_agent_or_chain(chat_message)
         else:
             with st.spinner(ct.SPINNER_CONTACT_TEXT):
-                result = utils.notice_slack(chat_message)
+                result = utils.run_sns_mode_response(chat_message)
     except Exception as e:
         logger.error(f"{ct.MAIN_PROCESS_ERROR_MESSAGE}\n{e}")
         st.error(utils.build_error_message(ct.MAIN_PROCESS_ERROR_MESSAGE), icon=ct.ERROR_ICON)

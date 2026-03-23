@@ -6,6 +6,7 @@
 # ライブラリの読み込み
 ############################################################
 import os
+import hashlib
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 import streamlit as st
@@ -224,6 +225,248 @@ def _generate_web_search_query(user_input: str) -> str:
     chain = LLMChain(llm=st.session_state.llm, prompt=prompt)
     q = chain.run(input_text=user_input).strip()
     return q.replace("\n", " ").strip()
+
+
+def _get_youtube_api_key() -> str:
+    if not getattr(ct, "YOUTUBE_ENABLED", False):
+        return ""
+
+    return os.getenv("YOUTUBE_API_KEY", "").strip()
+
+
+def _build_youtube_search_query(query: str) -> str:
+    normalized = (query or "").replace(" OR ", " ").replace('"', " ").strip()
+    hint = getattr(ct, "YOUTUBE_QUERY_HINT", "").strip()
+    if hint:
+        return f"{normalized} {hint}".strip()
+    return normalized
+
+
+def _make_youtube_cache_key(topic: str, query: str, max_results: int) -> str:
+    raw = f"{topic}::{query}::{max_results}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _get_cached_youtube_items(cache_key: str):
+    cache = st.session_state.get("youtube_cache", {})
+    cached = cache.get(cache_key)
+    if not cached:
+        return None
+
+    ttl_sec = getattr(ct, "YOUTUBE_CACHE_TTL_SEC", 10800)
+    fetched_at = cached.get("fetched_at", 0)
+    if time.time() - fetched_at > ttl_sec:
+        return None
+
+    return cached.get("items", [])
+
+
+def _set_cached_youtube_items(cache_key: str, items: list):
+    if "youtube_cache" not in st.session_state:
+        st.session_state.youtube_cache = {}
+
+    st.session_state.youtube_cache[cache_key] = {
+        "fetched_at": time.time(),
+        "items": items,
+    }
+
+
+def _collect_youtube_by_topic(topic: str, query: str, max_results: int = None):
+    logger = logging.getLogger(ct.LOGGER_NAME)
+
+    # セッション中にquotaExceededが発生していたらスキップ
+    if hasattr(st.session_state, 'youtube_disabled_reason') and st.session_state.youtube_disabled_reason:
+        logger.warning(f"YouTube API は無効化されています: {st.session_state.youtube_disabled_reason}")
+        return {topic: []}
+
+    api_key = _get_youtube_api_key()
+    if not api_key:
+        st.session_state.youtube_disabled_reason = ct.YOUTUBE_API_KEY_MISSING_MESSAGE
+        return {topic: []}
+
+    max_results = max_results or getattr(ct, "YOUTUBE_MAX_RESULTS_PER_TOPIC", 5)
+    youtube_query = _build_youtube_search_query(query)
+    cache_key = _make_youtube_cache_key(topic, youtube_query, max_results)
+
+    cached_items = _get_cached_youtube_items(cache_key)
+    if cached_items is not None:
+        return {topic: cached_items}
+
+    published_after = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=getattr(ct, "YOUTUBE_PUBLISHED_DAYS", 30))
+    ).isoformat().replace("+00:00", "Z")
+
+    params = {
+        "part": "snippet",
+        "q": youtube_query,
+        "type": "video",
+        "maxResults": max_results,
+        "order": "relevance",
+        "publishedAfter": published_after,
+        "regionCode": getattr(ct, "YOUTUBE_REGION_CODE", "JP"),
+        "relevanceLanguage": getattr(ct, "YOUTUBE_RELEVANCE_LANGUAGE", "ja"),
+        "safeSearch": getattr(ct, "YOUTUBE_SAFE_SEARCH", "moderate"),
+        "key": api_key,
+    }
+
+    try:
+        response = requests.get(
+            "https://www.googleapis.com/youtube/v3/search",
+            params=params,
+            timeout=getattr(ct, "YOUTUBE_API_TIMEOUT_SEC", 5),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except requests.HTTPError as e:
+        # quotaExceeded エラーをチェック
+        try:
+            error_payload = response.json()
+            if "error" in error_payload:
+                error_info = error_payload["error"]
+                errors_list = error_info.get("errors", [])
+                
+                # quotaExceeded の検知
+                for err in errors_list:
+                    if err.get("reason") == "quotaExceeded":
+                        reason = "YouTube APIの日次クォータに達しました。このセッション中はSNSモードが利用できません。"
+                        st.session_state.youtube_disabled_reason = reason
+                        logger.warning(f"YouTube quotaExceeded detected: {error_info.get('message')}")
+                        return {topic: []}
+        except (ValueError, KeyError):
+            pass
+        
+        # その他のHTTPエラー処理
+        logger.warning(f"YouTube API HTTP error: {e}")
+        st.session_state.youtube_disabled_reason = f"YouTube API エラー: {str(e)}"
+        return {topic: []}
+    except requests.RequestException as e:
+        logger.warning(f"YouTube API request error: {e}")
+        st.session_state.youtube_disabled_reason = str(e)
+        return {topic: []}
+    except Exception as e:
+        logger.warning(f"YouTube API unexpected error: {e}")
+        st.session_state.youtube_disabled_reason = str(e)
+        return {topic: []}
+
+    items = []
+    for item in payload.get("items", []):
+        snippet = item.get("snippet", {})
+        video_id = (item.get("id") or {}).get("videoId", "")
+        if not video_id:
+            continue
+
+        title = snippet.get("title", "").strip()
+        channel_title = snippet.get("channelTitle", "").strip()
+        published_at = snippet.get("publishedAt", "").strip()
+        url = f"https://www.youtube.com/watch?v={video_id}"
+
+        items.append({
+            "topic": topic,
+            "title": title,
+            "published": published_at,
+            "source": f"{ct.YOUTUBE_PROVIDER_LABEL} / {channel_title}" if channel_title else ct.YOUTUBE_PROVIDER_LABEL,
+            "url": url,
+            "rss_summary": "",
+        })
+
+    _set_cached_youtube_items(cache_key, items)
+    return {topic: items}
+
+
+def build_youtube_sns_llm_chain(user_prompt: str, max_results: int = None):
+    logger = logging.getLogger(ct.LOGGER_NAME)
+
+    search_query = _generate_web_search_query(user_prompt)
+    if not search_query:
+        search_query = user_prompt.strip()
+
+    # YouTube ビデオ収集（topic名はsns_youtubeで固定）
+    youtube_items = _collect_youtube_by_topic(
+        topic="sns_youtube",
+        query=search_query,
+        max_results=max_results or getattr(ct, "YOUTUBE_MAX_RESULTS_PER_TOPIC", 5),
+    )
+
+    # quotaExceeded でAPI無効化された場合、エラーメッセージを返す
+    if hasattr(st.session_state, 'youtube_disabled_reason') and st.session_state.youtube_disabled_reason:
+        return None, {
+            "search_query": "",
+            "title_list": [],
+            "url_list": [],
+            "source_list": [],
+        }
+
+    title_corpus = _make_title_corpus(youtube_items)
+    title_list = _make_title_list(youtube_items)
+    url_list = _make_url_list(youtube_items)
+    source_list = _make_source_list(youtube_items)
+
+    if not title_list:
+        return None, {
+            "search_query": search_query,
+            "title_list": [],
+            "url_list": [],
+            "source_list": [],
+        }
+
+    topic_summary = _summarize_content(title_corpus)
+    url_text = "\n".join(url_list) if isinstance(url_list, list) else str(url_list)
+    source_text = "\n".join(source_list) if isinstance(source_list, list) else str(source_list)
+
+    prompt = PromptTemplate(
+        input_variables=["user_input"],
+        template=ct.SYSTEM_PROMPT_YOUTUBE_RAG_ANSWER.format(
+            original_prompt=user_prompt,
+            search_query=search_query,
+            topic_summary=topic_summary,
+            title_corpus=title_corpus,
+            source_text=source_text,
+            url_text=url_text,
+        ),
+    )
+
+    chain = LLMChain(llm=st.session_state.llm, prompt=prompt)
+    meta = {
+        "search_query": search_query,
+        "title_list": title_list if isinstance(title_list, list) else [],
+        "url_list": url_list if isinstance(url_list, list) else [],
+        "source_list": source_list if isinstance(source_list, list) else [],
+    }
+    logger.info({"build_youtube_sns_llm_chain": {"search_query": search_query, "result_count": len(meta["title_list"])}})
+
+    return chain, meta
+
+
+def run_sns_mode_response(chat_message: str) -> str:
+    logger = logging.getLogger(ct.LOGGER_NAME)
+
+    chain, meta = build_youtube_sns_llm_chain(chat_message)
+    st.session_state.last_sources = {
+        "title_list": list(meta.get("title_list", [])),
+        "url_list": list(meta.get("url_list", [])),
+        "source_list": list(meta.get("source_list", [])),
+    }
+
+    if chain is None:
+        if _get_youtube_api_key() == "":
+            return ct.YOUTUBE_API_KEY_MISSING_MESSAGE
+        return ct.YOUTUBE_NO_RESULT_MESSAGE
+
+    try:
+        result = chain.invoke({"user_input": chat_message})
+        answer = result.get("text", "") if isinstance(result, dict) else str(result)
+    except Exception as e:
+        logger.error(f"SNSモードでの回答生成に失敗: {e}", exc_info=True)
+        st.session_state.last_sources = {}
+        return "申し訳ございません。SNSモードでの回答生成に失敗しました。"
+
+    if "chat_history" in st.session_state:
+        st.session_state.chat_history.extend([
+            HumanMessage(content=chat_message),
+            AIMessage(content=answer),
+        ])
+
+    return answer
 
 def build_dynamic_web_llm_chain(user_prompt: str, max_articles_per_topic: int = 8):
     """
