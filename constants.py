@@ -649,7 +649,9 @@ INPUT_TEXT_LIMIT_ERROR_MESSAGE = f"入力されたテキストの文字数が受
 YOUTUBE_API_KEY_MISSING_MESSAGE = "SNSモードを使うには、環境変数 YOUTUBE_API_KEY の設定が必要です。"
 YOUTUBE_NO_RESULT_MESSAGE = "YouTubeで関連する公開動画が見つかりませんでした。入力内容を変えて再度お試しください。"
 YOUTUBE_QUOTA_EXCEEDED_MESSAGE = "YouTube APIの日次クォータに達しました。このセッション中はSNSモードが利用できません。"
-
+YOUTUBE_API_DISABLED_MESSAGE = "SNSモードは現在利用できません。YouTube APIの停止理由をご確認ください。"
+YOUTUBE_SNS_UNKNOWN_ERROR_MESSAGE = "SNSモードで予期しない状態が発生しました。時間をおいて再試行してください。"
+YOUTUBE_SNS_CHAIN_ERROR_MESSAGE = "申し訳ございません。SNSモードでの回答生成に失敗しました。"
 
 # ==========================================
 # スタイリング

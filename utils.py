@@ -387,27 +387,36 @@ def build_youtube_sns_llm_chain(user_prompt: str, max_results: int = None):
         max_results=max_results or getattr(ct, "YOUTUBE_MAX_RESULTS_PER_TOPIC", 5),
     )
 
-    # quotaExceeded でAPI無効化された場合、エラーメッセージを返す
-    if hasattr(st.session_state, 'youtube_disabled_reason') and st.session_state.youtube_disabled_reason:
-        return None, {
-            "search_query": "",
-            "title_list": [],
-            "url_list": [],
-            "source_list": [],
-        }
+    # 共通メタ
+    meta = {
+        "status": "ok",          # ok | disabled | no_results | error
+        "reason": "",
+        "search_query": search_query,
+        "title_list": [],
+        "url_list": [],
+        "source_list": [],
+    }
+
+    # 1) API無効化状態（quotaExceeded / 認証失敗 / 通信失敗など）　の場合のエラーメッセージ
+    disabled_reason = st.session_state.get("youtube_disabled_reason", "")
+    if disabled_reason:
+        meta["status"] = "disabled"
+        meta["reason"] = disabled_reason
+        return None, meta
 
     title_corpus = _make_title_corpus(youtube_items)
     title_list = _make_title_list(youtube_items)
     url_list = _make_url_list(youtube_items)
     source_list = _make_source_list(youtube_items)
 
-    if not title_list:
-        return None, {
-            "search_query": search_query,
-            "title_list": [],
-            "url_list": [],
-            "source_list": [],
-        }
+    meta["title_list"] = title_list if isinstance(title_list, list) else []
+    meta["url_list"] = url_list if isinstance(url_list, list) else []
+    meta["source_list"] = source_list if isinstance(source_list, list) else []
+
+    # 2) 正常呼び出しだが検索0件　の場合のエラーメッセージ
+    if not meta["title_list"]:
+        meta["status"] = "no_results"
+        return None, meta
 
     topic_summary = _summarize_content(title_corpus)
     url_text = "\n".join(url_list) if isinstance(url_list, list) else str(url_list)
@@ -426,13 +435,13 @@ def build_youtube_sns_llm_chain(user_prompt: str, max_results: int = None):
     )
 
     chain = LLMChain(llm=st.session_state.llm, prompt=prompt)
-    meta = {
-        "search_query": search_query,
-        "title_list": title_list if isinstance(title_list, list) else [],
-        "url_list": url_list if isinstance(url_list, list) else [],
-        "source_list": source_list if isinstance(source_list, list) else [],
-    }
-    logger.info({"build_youtube_sns_llm_chain": {"search_query": search_query, "result_count": len(meta["title_list"])}})
+    logger.info({
+        "build_youtube_sns_llm_chain": {
+            "status": meta["status"],
+            "search_query": search_query,
+            "result_count": len(meta["title_list"]),
+        }
+    })
 
     return chain, meta
 
@@ -448,9 +457,22 @@ def run_sns_mode_response(chat_message: str) -> str:
     }
 
     if chain is None:
+        status = meta.get("status", "")
+        reason = meta.get("reason", "")
+
         if _get_youtube_api_key() == "":
             return ct.YOUTUBE_API_KEY_MISSING_MESSAGE
-        return ct.YOUTUBE_NO_RESULT_MESSAGE
+
+        # ここが重要: no_results と disabled を分離
+        if status == "disabled":
+            # 理由をそのまま返す（空ならフォールバック）
+            return reason or ct.YOUTUBE_API_DISABLED_MESSAGE
+
+        if status == "no_results":
+            return ct.YOUTUBE_NO_RESULT_MESSAGE
+
+        # 想定外
+        return ct.YOUTUBE_SNS_UNKNOWN_ERROR_MESSAGE
 
     try:
         result = chain.invoke({"user_input": chat_message})
@@ -458,7 +480,7 @@ def run_sns_mode_response(chat_message: str) -> str:
     except Exception as e:
         logger.error(f"SNSモードでの回答生成に失敗: {e}", exc_info=True)
         st.session_state.last_sources = {}
-        return "申し訳ございません。SNSモードでの回答生成に失敗しました。"
+        return ct.YOUTUBE_SNS_CHAIN_ERROR_MESSAGE
 
     if "chat_history" in st.session_state:
         st.session_state.chat_history.extend([
