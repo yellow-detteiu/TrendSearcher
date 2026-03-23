@@ -887,8 +887,6 @@ def execute_agent_or_chain(chat_message):
         # Agent Executorの実行（AIエージェント機能を使う場合は、Toolとして設定した関数内で会話履歴への追加処理を実施）
         result = st.session_state.agent_executor.invoke({"input": chat_message}, {"callbacks": [st_callback]})
         response = result["output"]
-        # 非エージェントモード用に last_sources をクリア（ユーザー質問では生成されるため不要）
-        st.session_state.last_sources = {}
     # AIエージェントを利用しない場合
     else:
         # ユーザー入力から動的に検索クエリを生成し、ニュース取得 + 要約するチェーンを構築
