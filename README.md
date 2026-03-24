@@ -8,7 +8,7 @@
 
 ### 実行手順
 - 「pip install -r requirements.txt」で必要なライブラリをインストール
-- 「.env」に、「OPENAI_API_KEY」、「SERPAPI_API_KEY」、「YOUTUBE_API_KEY（YouTubeDataAPI[https://note.com/quicktoolbox/n/nb2c4c32c5e7f]）」を定義する
+- 「.env」に、「OPENAI_API_KEY」、「SERPAPI_API_KEY」、「YOUTUBE_API_KEY（YouTubeDataAPI[https://note.com/quicktoolbox/n/nb2c4c32c5e7f] ）」を定義する
 - 「streamlit run main.py」でアプリを起動
 
 ### 出力例
